@@ -9,6 +9,16 @@ import numpyro
 import numpyro.distributions as dist
 from numpyro.infer import MCMC, NUTS
 import jax
+import time
+import tracemalloc
+import logging
+import sys
+import jax.scipy.optimize as jso
+
+
+ # Set Logging level - INFO and above
+logging.basicConfig(level=logging.INFO,  format="%(asctime)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
+
 
 class Calender_Analysis:
     def __init__(self, data, model_type="anisotropic", priors=None):
@@ -60,7 +70,6 @@ class Calender_Analysis:
 
         # Use user-defined priors if provided, otherwise use default priors
         self.priors = default_priors if priors is None else {**default_priors, **priors}
-    
 
 
     def _load_data(self, data):
@@ -350,9 +359,8 @@ class Calender_Analysis:
         hole_posn_model = jnp.stack([x_model, y_model], axis=1)
 
         return hole_posn_model
-    
-    # CONSIDER MAKING THIS BE ABLE TO ACCEPT MANY DIFFERENT MODEL PARAMATERS AT ONCE
-    def likelihood(self, N, r, x0, y0, alpha, sigma, log=False):
+
+    def likelihood(self, N, r, x0, y0, alpha, sigma, log=False, data = None):
         """
         Computes the likelihood (or log-likelihood) of the observed hole positions given model parameters.
 
@@ -361,7 +369,7 @@ class Calender_Analysis:
         
         - **Isotropic Gaussian**: A single standard deviation `sigma` applies to both x and y errors.
         - **Anisotropic Gaussian**: Separate standard deviations `sigma_r` and `sigma_t` for radial 
-        and tangential errors.
+          and tangential errors.
 
         The likelihood is calculated as:
         
@@ -377,11 +385,10 @@ class Calender_Analysis:
         - n \log(2\pi\sigma_r\sigma_t)
         \]
 
-        **Automatic Differentiation Support**:
-        - This function is compatible with JAX's `jax.grad()` for computing derivatives with respect to model parameters.
-        - Gradients can be used for parameter optimization or inference methods like Hamiltonian Monte Carlo (HMC).
-        
-        Parameters
+        If a subset of data (`data`) is provided, the gradients are computed over only that subset. 
+        This enables efficient **stochastic gradient descent (SGD)** or **mini-batch optimization**.
+
+        **Parameters**
         ----------
         N : float
             The total number of holes in the original (pre-fragmented) calendar ring.
@@ -393,18 +400,22 @@ class Calender_Analysis:
             Array of y-offsets for each section.
         alpha : jnp.ndarray
             Array of angular offsets for each section.
-        sigma : float or tuple of floats
+        sigma : float or jnp.ndarray
             - If **isotropic**, a single float `sigma` is used for both x and y errors.
-            - If **anisotropic**, a jax array `[sigma_r, sigma_t]` is used for radial and tangential errors.
+            - If **anisotropic**, a JAX array `[sigma_r, sigma_t]` is used for radial and tangential errors.
         log : bool, optional
-            If `True`, returns the log-likelihood. If `False`, returns the likelihood. Default is `False`.
+            If `True`, returns the **log-likelihood**.
+            If `False`, returns the **likelihood**. Default is `False`.
+        data : pd.DataFrame, optional
+            A subset of the dataset to compute likelihood on. If `None`, the full dataset is used.
+            This enables **stochastic optimization** by computing likelihood using **mini-batches**.
 
-        Returns
+        **Returns**
         -------
         jnp.ndarray
-            - If `log=True`, returns the sum of log-likelihood values.
-            - If `log=False`, returns the exponentiated likelihood.
-            """
+            - If `log=True`, returns the **sum of log-likelihood values**.
+            - If `log=False`, returns the **exponentiated likelihood**.
+        """
 
         # This implements a similiar analysis to `hole_positions` 
         # Goes on to evaluate discrepancy between model and observed data and calculate log likelihood
@@ -414,6 +425,19 @@ class Calender_Analysis:
         # It does no not use the `hole_positions` function but instead calculates the modelled hole positions directly 
         # Stops type checking inputs from slowing preformance when many calls are made
 
+        # ------------------------- Import data or use full dataset -------------------------
+        if data is None:
+            section_ids = self.section_ids_obs
+            hole_nos = self.hole_nos_obs
+            x_pos = self.x_obs
+            y_pos = self.y_obs
+        else:
+            section_ids = data["Section ID"].values
+            hole_nos = data["Hole"].values
+            x_pos = data["Mean(X)"].values
+            y_pos = data["Mean(Y)"].values
+            
+
         # ------------------------- Repeat of code from `hole_positions` -------------------------
         
         # Compute expected positions of model from parameters for each hole/ data point
@@ -421,18 +445,18 @@ class Calender_Analysis:
         # Hole value - anguluar position in the ring - from fraction of 2 pi based on hole number/ N 
         # Section value - using alpha gives relative rotation of each section/ anguluar offset
         # List of phi values for each hole
-        phi = (2 * jnp.pi * (self.hole_nos_obs - 1) / N) + alpha[self.section_ids_obs - 1]
+        phi = (2 * jnp.pi * (hole_nos - 1) / N) + alpha[section_ids - 1]
         # Expected x and y positions of the hole based on the model - using r, phi, x0, y0
         # List of modelled x and y values of for each hole
-        x_model = r * jnp.cos(phi) + x0[self.section_ids_obs - 1]
-        y_model = r * jnp.sin(phi) + y0[self.section_ids_obs - 1]
+        x_model = r * jnp.cos(phi) + x0[section_ids - 1]
+        y_model = r * jnp.sin(phi) + y0[section_ids - 1]
 
         # -----------------------------------------------------------------------------------------
 
         # Compute error vectors in cartesian coordinates
         # List of error vectors for each hole - difference between observed and modelled x and y values
-        error_x = self.x_obs - x_model
-        error_y = self.y_obs - y_model
+        error_x = x_pos - x_model
+        error_y = y_pos - y_model
 
         # # Store deterministic transformed errors (optional)
         # error_vectors = jnp.stack([error_r, error_t], axis=1)
@@ -478,15 +502,19 @@ class Calender_Analysis:
         else: 
             return jnp.exp(jnp.sum(log_likelihoods_variable) + log_likelihoods_constant)
         
-    def likelihood_grad(self, N, r, x0, y0, alpha, sigma, log=True):
+        
+    def grad_likelihood(self, N, r, x0, y0, alpha, sigma, log=True, data = None):
         """
         Computes the gradients of the likelihood or log-likelihood with respect to the model parameters.
 
-        This function uses JAX automatic differentiation to compute:
+        This function uses JAX automatic differentiation (`jax.grad()`) to compute:
         - The gradients of the log-likelihood \( \log L(\mathcal{D} | \theta) \)
         - The gradients of the likelihood \( L(\mathcal{D} | \theta) \)
+        
+        If a subset of data (`data`) is provided, the gradients are computed over only that subset. 
+        This enables efficient **stochastic gradient descent (SGD)** or **mini-batch optimization**.
 
-        Parameters
+        **Parameters**
         ----------
         N : float
             The total number of holes in the original (pre-fragmented) calendar ring.
@@ -504,17 +532,26 @@ class Calender_Analysis:
         log : bool, optional
             If `True`, computes gradients of the **log-likelihood**.
             If `False`, computes gradients of the **likelihood**. Default is `True`.
+        data : pd.DataFrame, optional
+            A subset of the dataset to compute gradients on. If `None`, the full dataset is used.
+            This enables **stochastic optimization** by computing gradients using **mini-batches**.
 
-        Returns
+        **Returns**
         -------
         dict
             A dictionary containing gradients of the log-likelihood or likelihood 
-            with respect to each parameter: `{"N": dL/dN, "r": dL/dr, ...}`
+            with respect to each parameter:  
+            - `"N"` : Gradient w.r.t. total number of holes.  
+            - `"r"` : Gradient w.r.t. radius of the ring.  
+            - `"x0"` : Gradients w.r.t. x-offsets (shape: `num_sections`).  
+            - `"y0"` : Gradients w.r.t. y-offsets (shape: `num_sections`).  
+            - `"alpha"` : Gradients w.r.t. angular offsets (shape: `num_sections`).  
+            - `"sigma"` : Gradient w.r.t. sigma (scalar for isotropic, array for anisotropic).
         """
 
         # Compute gradients using JAX's automatic differentiation tool
         loss_grad_fn = jax.grad(self.likelihood, argnums=(0, 1, 2, 3, 4, 5))
-        gradients = loss_grad_fn(N, r, x0, y0, alpha, sigma, log)
+        gradients = loss_grad_fn(N, r, x0, y0, alpha, sigma, log, data)
 
         # Create a dictionary of gradients
         grad_dict = {
@@ -528,20 +565,23 @@ class Calender_Analysis:
 
         return grad_dict
     
-    def Log_likelihood_grad_analytic(self, N, r, x0, y0, alpha, sigma):
+    def analytic_grad_loglikelihood(self, N, r, x0, y0, alpha, sigma, data = None):
         """
         Computes the analytical gradients of the log-likelihood function.
 
         This function calculates the partial derivatives of the log-likelihood function
         with respect to each model parameter using the chain rule. It supports both isotropic 
-        and anisotropic error models.
+        and anisotropic error models. 
+
+        If a subset of data (`data`) is provided, the gradients are computed over only that subset. 
+        This enables efficient **stochastic gradient descent (SGD)** or **mini-batch optimization**.
 
         **Log-likelihood expressions:**
-        - *Isotropic model* (single σ for all errors):
+        - *Isotropic model* (single sigma for all errors):
           \[
           \log L = -\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left( e_{x,i}^2 + e_{y,i}^2 \right) - n \log(2\pi \sigma)
           \]
-        - *Anisotropic model* (independent radial and tangential σ):
+        - *Anisotropic model* (independent radial and tangential sigma):
           \[
           \log L = -\frac{1}{2} \sum_{i=1}^{n} \left( \frac{e_{r,i}^2}{\sigma_r^2} + \frac{e_{t,i}^2}{\sigma_t^2} \right) - n \log(2\pi \sigma_r \sigma_t)
           \]
@@ -568,6 +608,10 @@ class Calender_Analysis:
         sigma : float or jnp.ndarray
             - If **isotropic**, a single float `sigma` is used for both x and y errors.
             - If **anisotropic**, a tuple `(sigma_r, sigma_t)` is used for radial and tangential errors.
+        data : pd.DataFrame, optional
+            A subset of the dataset to compute gradients on. If `None`, the full dataset is used.
+            This is useful for **stochastic gradient descent (SGD)** where mini-batches of data 
+            are processed iteratively.
 
         **Returns**
         -------
@@ -584,35 +628,51 @@ class Calender_Analysis:
         --------
         - This function **does not use automatic differentiation**; instead, it explicitly derives 
           and applies the chain rule to compute analytical derivatives.
+        - If `data` is provided, the gradients are **only computed on that subset**, 
+          making the function **compatible with stochastic optimization methods**.
         """
         # Uses the chain rule to determine the analytical gradients of the log likelihood
         # For each item of the graphical model we word out gradients of next dependant variable
         # Total derivatives will be product of all partial derivatives
 
+        # ------------------------- Import data or use full dataset -------------------------
+        if data is None:
+            section_ids = self.section_ids_obs
+            hole_nos = self.hole_nos_obs
+            x_pos = self.x_obs
+            y_pos = self.y_obs
+
+        else:
+            section_ids = data["Section ID"].values
+            hole_nos = data["Hole"].values
+            x_pos = data["Mean(X)"].values
+            y_pos = data["Mean(Y)"].values
+
+
         ## ------------------ Compute intermediate values ------------------
 
         # phi: functions on N, alpha
-        phi = (2 * jnp.pi * (self.hole_nos_obs - 1) / N) + alpha[self.section_ids_obs - 1] # - (n_holes)
+        phi = (2 * jnp.pi * (hole_nos - 1) / N) + alpha[section_ids - 1] # - (n_holes)
 
         # x_model: function of r, phi, x0
-        x_model = r * jnp.cos(phi) + x0[self.section_ids_obs - 1] # - (n_holes)
+        x_model = r * jnp.cos(phi) + x0[section_ids - 1] # - (n_holes)
 
         # y_model: function of r, phi, y0
-        y_model = r * jnp.sin(phi) + y0[self.section_ids_obs - 1] # - (n_holes)
+        y_model = r * jnp.sin(phi) + y0[section_ids - 1] # - (n_holes)
 
         # Error terms: function of modeled positions (x_model, y_model)
-        error_x = self.x_obs - x_model  # - (n_holes)
-        error_y = self.y_obs - y_model  # - (n_holes)
+        error_x = x_pos - x_model  # - (n_holes)
+        error_y = y_pos - y_model  # - (n_holes)
 
         ## ------------------ Compute derivatives using chain rule ------------------
 
         # Partial derivatives of phi
-        grad_phi_N = -2 * jnp.pi * (self.hole_nos_obs - 1) / N**2  # dphi/dN - (n_holes)
-        grad_phi_alpha = jnp.eye(self.num_sections)[self.section_ids_obs - 1].T # dphi/dalpha - one-hot encoded matrix of shape (num_sections, n_holes) -- identity vector where 1 at section index, 0 elsewhere
+        grad_phi_N = -2 * jnp.pi * (hole_nos - 1) / N**2  # dphi/dN - (n_holes)
+        grad_phi_alpha = jnp.eye(self.num_sections)[section_ids - 1].T # dphi/dalpha - one-hot encoded matrix of shape (num_sections, n_holes) -- identity vector where 1 at section index, 0 elsewhere
 
         # Partial derivatives of x_model
         grad_x_model_r = jnp.cos(phi)  # dx_model/dr - (n_holes)
-        grad_x_model_x0 = jnp.eye(self.num_sections)[self.section_ids_obs - 1].T  # dx_model/dx0 - (num_sections, n_holes) 
+        grad_x_model_x0 = jnp.eye(self.num_sections)[section_ids - 1].T  # dx_model/dx0 - (num_sections, n_holes) 
         # grad_x_model_y0 = 0 
         grad_x_model_phi = -r * jnp.sin(phi)  # dx_model/dphi - (n_holes)
         grad_x_model_N = grad_x_model_phi * grad_phi_N  # dx_model/dN - (n_holes)
@@ -621,7 +681,7 @@ class Calender_Analysis:
         # Partial derivatives of y_model
         grad_y_model_r = jnp.sin(phi)  # dy_model/dr
         # grad_y_model_x0 = 0
-        grad_y_model_y0 = jnp.eye(self.num_sections)[self.section_ids_obs - 1].T  # dy_model/dy0 - (num_sections, n_holes) 
+        grad_y_model_y0 = jnp.eye(self.num_sections)[section_ids - 1].T  # dy_model/dy0 - (num_sections, n_holes) 
         grad_y_model_phi = r * jnp.cos(phi)  # dy_model/dphi - (n_holes)
         grad_y_model_N = grad_y_model_phi * grad_phi_N  # dy_model/dN - (n_holes)
         grad_y_model_alpha = grad_y_model_phi * grad_phi_alpha  # dy_model/dalpha  - (num_sections, n_holes) 
@@ -651,17 +711,12 @@ class Calender_Analysis:
 
             grad_N = - jnp.sum((error_x * grad_error_x_N + error_y * grad_error_y_N) / sigma_val**2)
             grad_r = - jnp.sum((error_x * grad_error_x_r + error_y * grad_error_y_r) / sigma_val**2)
-
-            # Believe this part is wrong - need to check! FLAG HERE
-            grad_sigma = - jnp.sum((error_x**2 + error_y**2) / sigma_val**3 - len(error_x) / sigma_val)
-
+            grad_sigma = + jnp.sum((error_x**2 + error_y**2) / sigma_val**3) - len(error_x) / sigma_val
 
             # Sum of errors for each section - does the following but seperately for each section - as all data points outside of this section go to zero
             grad_x0 = - jnp.sum((error_x * grad_error_x_x0 / sigma_val**2), axis=1) # (num_sections)
             grad_y0 = - jnp.sum((error_y * grad_error_y_y0 / sigma_val**2), axis=1)  # (num_sections) 
             grad_alpha = -jnp.sum((error_x * grad_error_x_alpha + error_y * grad_error_y_alpha) / sigma_val**2, axis = 1)  # (num_sections)
-
-
 
             grad_dict = {
                 "N": grad_N,
@@ -720,16 +775,15 @@ class Calender_Analysis:
 
 
             ## ------------------ Compute overall log-likelihood gradients ------------------
-            grad_N = - jnp.sum((error_r * grad_error_r_N) / sigma_r**2 + (error_t * grad_error_t_N) / sigma_t**2)
-            grad_r = - jnp.sum((error_r * grad_error_r_r) / sigma_r**2 + (error_t * grad_error_t_r) / sigma_t**2)
-            grad_x0 = - jnp.sum((error_r * grad_error_r_x0) / sigma_r**2 + (error_t * grad_error_t_x0) / sigma_t**2, axis=1)
-            grad_y0 = - jnp.sum((error_r * grad_error_r_y0) / sigma_r**2 + (error_t * grad_error_t_y0) / sigma_t**2, axis=1)
+            grad_N = - jnp.sum((error_r * grad_error_r_N) / sigma_r**2 + (error_t * grad_error_t_N) / sigma_t**2) # dL/dN
+            grad_r = - jnp.sum((error_r * grad_error_r_r) / sigma_r**2 + (error_t * grad_error_t_r) / sigma_t**2) # dL/dr
+            grad_x0 = - jnp.sum((error_r * grad_error_r_x0) / sigma_r**2 + (error_t * grad_error_t_x0) / sigma_t**2, axis=1) # dL/dx0
+            grad_y0 = - jnp.sum((error_r * grad_error_r_y0) / sigma_r**2 + (error_t * grad_error_t_y0) / sigma_t**2, axis=1) # dL/dy0
+            grad_alpha = - jnp.sum((error_r * grad_error_r_alpha)/ sigma_r**2 + (error_t * grad_error_t_alpha) / sigma_t**2, axis=1) # dL/dalpha
 
-            # Believe this part is wrong - need to check FLAG HERE
-            grad_alpha = - jnp.sum((error_r * grad_error_r_alpha + error_t * grad_error_t_alpha) / sigma_r**2 + sigma_t**2, axis=1)
-            grad_sigma_r = - jnp.sum(error_r**2 / sigma_r**3 - len(error_r) / sigma_r)
-            grad_sigma_t = - jnp.sum(error_t**2 / sigma_t**3 - len(error_t) / sigma_t)
-            grad_sigma = - jnp.array([grad_sigma_r, grad_sigma_t])
+            grad_sigma_r = jnp.sum(error_r**2 / sigma_r**3) - len(error_r) / sigma_r # dL/dsigma_r
+            grad_sigma_t = jnp.sum(error_t**2 / sigma_t**3)- len(error_t) / sigma_t # dL/dsigma_t
+            grad_sigma = jnp.array([grad_sigma_r, grad_sigma_t]) # dL/dsigma
 
             grad_dict = {
                 "N": grad_N,
@@ -741,6 +795,183 @@ class Calender_Analysis:
             }
             
             return grad_dict
+
+    
+    def compare_performance_grad(self, N, r, x0, y0, alpha, sigma, tolerance=1e-3, num_runs=100, subset_size = 40, return_results=False):
+        """
+        Compares execution time, memory usage, and numerical agreement between:
+        - `grad_likelihood` (automatic differentiation via JAX)
+        - `analytic_grad_loglikelihood` (manually derived gradients)
+
+        This function now supports **minibatch processing**, where each gradient computation 
+        is performed on a randomly sampled subset of the dataset to simulate stochastic 
+        gradient descent (SGD). The subset size is controlled by `subset_size`.
+
+        Runs each method `num_runs` times, taking random minibatches of data, 
+        to obtain averaged performance metrics for a more robust comparison.
+
+        Parameters
+        ----------
+        N : float
+            Total number of holes in the full calendar ring.
+        r : float
+            Estimated radius of the ring.
+        x0 : jnp.ndarray
+            X-offsets for each section.
+        y0 : jnp.ndarray
+            Y-offsets for each section.
+        alpha : jnp.ndarray
+            Angular offsets for each section.
+        sigma : float or tuple
+            - If **isotropic**, a single float `sigma`.
+            - If **anisotropic**, a tuple `(sigma_r, sigma_t)`.
+        tolerance : float, optional
+            The acceptable numerical precision for comparison. Default is `1e-3`.
+        num_runs : int, optional
+            Number of times to run each method to get averaged metrics. Default is `100`.
+        subset_size : int, optional
+            Number of data points to randomly sample for each gradient computation, 
+            simulating minibatch training. Default is `40`.
+        return_results : bool, optional
+            Whether to return the performance metrics as a dictionary. Default is `False`.
+
+        Returns
+        -------
+        dict or None
+            If `return_results=True`, returns a dictionary containing:
+            - `"Auto-Diff"` : Average execution time and memory usage for JAX automatic differentiation.
+            - `"Manual-Diff"` : Average execution time and memory usage for manually derived gradients.
+            - `"Agreement"` : Boolean indicating if gradients from both methods agree within tolerance.
+            - `"Max Deviation"` : Maximum absolute difference in gradient values between methods.
+            - `"Deviations"` : Dictionary of parameters where numerical mismatches were found.
+        
+            If `return_results=False`, only logs the results and returns `None`.
+        """
+
+        # Input validation
+        if not isinstance(N, float):
+            raise TypeError("N must be a float.")
+        if not isinstance(r, float):
+            raise TypeError("r must be a float.")
+        if not isinstance(x0, jnp.ndarray):
+            raise TypeError("x0 must be a JAX array.")
+        if not isinstance(y0, jnp.ndarray):
+            raise TypeError("y0 must be a JAX array.")
+        if not isinstance(alpha, jnp.ndarray):
+            raise TypeError("alpha must be a JAX array.")
+        if not isinstance(sigma, (float, jnp.ndarray)):
+            raise TypeError("sigma must be a float or JAX array.")
+        
+        # Enure data subset size is valid
+        if subset_size > self.data.shape[0]:
+            raise ValueError(f"Subset size cannot exceed the total number of data points: {self.data.shape[0]}.")
+
+
+        # ------------------ Initialize Storage for Statistics ------------------
+        auto_times, auto_memory = [], []
+        analytic_times, analytic_memory = [], []
+        
+        all_agree = True
+        max_deviation = 0.0
+        deviation_details = {}
+
+        # ------------------ Run Performance Test Over Multiple Iterations ------------------
+        for _ in range(num_runs):
+            # Take a random batch of 40 data points 
+            data_subset = self.data.sample(subset_size) 
+
+            # ------------------ Measure analytic_grad_loglikelihood (Manual) ------------------
+            # Start memory and time tracing
+            tracemalloc.start()
+            start_time = time.perf_counter()
+
+            grad_analytic = self.analytic_grad_loglikelihood(N, r, x0, y0, alpha, sigma, data_subset)
+
+            end_time = time.perf_counter()
+            _, analytic_peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+
+            # Calculate difference in time and memory
+            analytic_times.append(end_time - start_time)
+            # Convert to KB
+            analytic_memory.append(analytic_peak / 1024) 
+
+            # ------------------ Measure grad_likelihood (Auto-diff) ------------------
+            # Start memory and time tracing
+            tracemalloc.start()
+            start_time = time.perf_counter()
+
+            grad_auto = self.grad_likelihood(N, r, x0, y0, alpha, sigma, log=True, data = data_subset)
+
+            end_time = time.perf_counter()
+            _, auto_peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+
+            # Calculate difference in time and memory
+            auto_times.append(end_time - start_time)
+            # Convert to KB
+            auto_memory.append(auto_peak / 1024)  
+
+            # ------------------ Compare Gradients ------------------
+            # Run through each output - for derivative wrt each parameter 
+            for key in grad_auto.keys():
+                auto_grad = jnp.asarray(grad_auto[key])
+                analytic_grad = jnp.asarray(grad_analytic[key])
+                # Difference between results achieved for both methods
+                abs_diff = jnp.abs(auto_grad - analytic_grad)
+                max_diff = jnp.max(abs_diff) if abs_diff.size > 0 else 0.0
+
+                # Ensure that the gradients are close within the tolerance
+                if not jnp.all(abs_diff < tolerance):
+                    all_agree = False
+                    # Ensure that the max diff and where it occoured is stored for reporting
+                    if key not in deviation_details or deviation_details[key] < max_diff:
+                        deviation_details[key] = max_diff
+
+                # Update/ store the maximum deviation if it exceeds the current maximum
+                max_deviation = max(max_deviation, max_diff)
+
+        # ------------------ Compute Means and Std Dev ------------------
+        avg_auto_time = np.mean(auto_times)
+        std_auto_time = np.std(auto_times)
+        avg_auto_memory = np.mean(auto_memory)
+        std_auto_memory = np.std(auto_memory)
+
+        avg_analytic_time = np.mean(analytic_times)
+        std_analytic_time = np.std(analytic_times)
+        avg_analytic_memory = np.mean(analytic_memory)
+        std_analytic_memory = np.std(analytic_memory)
+
+        # ------------------ Logging and Output ------------------
+        agreement_status = " MATCH" if all_agree else " MISMATCH"
+
+        log_message = (
+            f"\nPerformance & Accuracy Comparison ({num_runs} runs):\n"
+            f"{'-'*60}\n"
+            f"Method:                 Auto-Diff              Manual-Diff\n"
+            f"Avg Execution Time (s): {avg_auto_time:.6f} ± {std_auto_time:.6f}   {avg_analytic_time:.6f} ± {std_analytic_time:.6f}\n"
+            f"Avg Peak Memory (KB):   {avg_auto_memory:.2f} ± {std_auto_memory:.2f}        {avg_analytic_memory:.2f} ± {std_analytic_memory:.2f}\n"
+            f"Gradient Agreement:     {agreement_status}\n"
+            f"Max Deviation:          {max_deviation:.3e}\n"
+        )
+
+        if not all_agree:
+            log_message += f"Deviations found in: {deviation_details}\n"
+
+        log_message += f"{'-'*60}"
+        logging.info(log_message)
+
+        # ------------------ Return Results if Requested ------------------
+        if return_results:
+            return {
+                "Auto-Diff": {"Time (s)": avg_auto_time, "Peak Memory (KB)": avg_auto_memory},
+                "Manual-Diff": {"Time (s)": avg_analytic_time, "Peak Memory (KB)": avg_analytic_memory},
+                "Agreement": all_agree,
+                "Max Deviation": max_deviation,
+                "Deviations": deviation_details if not all_agree else "None"
+            }
+
+        return None
 
 
     def NumPryo_model(self):
@@ -813,4 +1044,6 @@ class Calender_Analysis:
 
         # -------------------- Define likelihood --------------------
         numpyro.factor("likelihood", self.likelihood(N, r, x0, y0, alpha, sigma, log=True))
+
+    
             
