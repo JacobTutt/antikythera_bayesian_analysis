@@ -14,7 +14,11 @@ import tracemalloc
 import logging
 import sys
 import jax.scipy.optimize as jso
-
+import optax
+import jax.tree_util as jtu
+from tqdm.notebook import tqdm  
+from IPython.display import display
+from scipy.optimize import minimize
 
  # Set Logging level - INFO and above
 logging.basicConfig(level=logging.INFO,  format="%(asctime)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
@@ -59,13 +63,13 @@ class Calender_Analysis:
         # Default priors if none provided
         default_priors = {
             "N": dist.Uniform(300, 400),
-            "r": dist.Uniform(100, 200),
-            "x0": dist.Normal(0, 10),
-            "y0": dist.Normal(0, 10),
-            "alpha": dist.Normal(0, 0.1),
-            "sigma": dist.Exponential(1.0),  # For isotropic
-            "sigma_r": dist.Exponential(1.0),  # For anisotropic
-            "sigma_t": dist.Exponential(1.0),  # For anisotropic
+            "r": dist.Uniform(50, 100),
+            "x0": dist.Normal(80, 10),
+            "y0": dist.Normal(135, 10),
+            "alpha": dist.Normal(jnp.pi, jnp.pi / 6),
+            "sigma": dist.Exponential(0.5),  # For isotropic
+            "sigma_r": dist.Exponential(0.5),  # For anisotropic
+            "sigma_t": dist.Exponential(0.5),  # For anisotropic
         }
 
         # Use user-defined priors if provided, otherwise use default priors
@@ -972,6 +976,703 @@ class Calender_Analysis:
             }
 
         return None
+
+    def sample_from_priors(self, key, num_samples=100):
+        """
+        Samples multiple parameter sets from the prior distributions using NumPyro.
+
+        Parameters
+        ----------
+        key : jax.random.PRNGKey
+            Random key for JAX sampling.
+        num_samples : int, optional
+            Number of samples to generate. Default is `100`.
+
+        Returns
+        -------
+        dict
+            Dictionary containing arrays of sampled parameters. Each array has shape `(num_samples, ...)`.
+        """
+        # Generate subkeys for each parameter from overall key
+        keys = jax.random.split(key, len(self.priors) + 1)
+
+        # Use NumPyro to sample from the prior distributions defined during model initialisation
+        # For each it will sample num_samples times and return the array of samples for each parameter in overall dictionary
+        sampled_params = {
+            "N": numpyro.sample("N", self.priors["N"], rng_key=keys[0], sample_shape=(num_samples,)),
+            "r": numpyro.sample("r", self.priors["r"], rng_key=keys[1], sample_shape=(num_samples,)),
+            "x0": numpyro.sample("x0", self.priors["x0"].expand([self.num_sections]), 
+                                rng_key=keys[2], sample_shape=(num_samples,)),
+            "y0": numpyro.sample("y0", self.priors["y0"].expand([self.num_sections]), 
+                                rng_key=keys[3], sample_shape=(num_samples,)),
+            "alpha": numpyro.sample("alpha", self.priors["alpha"].expand([self.num_sections]), 
+                                    rng_key=keys[4], sample_shape=(num_samples,)),
+        }
+
+        # Sample sigma values based on model type
+        if self.model_type == "isotropic":
+            sampled_params["sigma"] = numpyro.sample("sigma", self.priors["sigma"], 
+                                                    rng_key=keys[5], sample_shape=(num_samples,))
+            
+        # If anisotropic model, sample sigma_r and sigma_t separately and then stack them in pairs - (num_samples, 2)
+        elif self.model_type == "anisotropic":
+            sampled_params["sigma"] = jnp.stack([
+                numpyro.sample("sigma_r", self.priors["sigma_r"], rng_key=keys[6], sample_shape=(num_samples,)),
+                numpyro.sample("sigma_t", self.priors["sigma_t"], rng_key=keys[7], sample_shape=(num_samples,))
+            ], axis=1)  
+
+        return sampled_params
+
+    # ------------------ Maximum Likelihood Estimation (MLE) ------------------
+    def Max_Likelihood_Est(self, sampling_type, num_samples=1000, num_iterations=500, learning_rate=0.01, batch_size=None, key=None, derivative='analytic', analyse_results=False, plot_history = False):
+        """
+        Generalized function to compute Maximum Likelihood Estimation (MLE) using different optimization methods.
+
+        Supported methods:
+        - Stochastic Gradient Descent (SGD)
+        - L-BFGS (Limited-memory BFGS)
+        - Newton's Method
+        - Simulated Annealing
+
+        Recommended Hyperparameters for Each Method:
+        -----------------------------------------------------
+        - **SGD (Stochastic Gradient Descent)**
+        - `learning_rate`: **0.01 - 0.1** (Recommended: **0.01**)
+        - `num_iterations`: **500 - 5000** (Recommended: **1000**)
+        - `batch_size`: **20 - 100** (If `None`, full batch is used)
+        - `derivative`: **'analytic'** (Recommended) or `'auto'`
+
+        - **L-BFGS (Limited-memory BFGS)**
+        - `num_iterations`: **50 - 500** (Recommended: **200**)
+        - `batch_size`: **Optional, use if data is large**
+        - `derivative`: **'analytic'** (Recommended) or `'auto'`
+
+        - **Newton's Method**
+        - `num_iterations`: **10 - 100** (Recommended: **50**)  
+        - `learning_rate`: **0.01 - 0.1** (Recommended: **0.01**)  
+        - `batch_size`: **Optional, use if data is large**  
+        - `derivative`: **'analytic'** (Recommended) or `'auto'`  
+        - (Newton's method is **computationally expensive** and may be unstable for large parameter spaces)
+
+        - **Simulated Annealing**
+        - `num_iterations`: **100 - 10,000** (Recommended: **5000**)
+        - `batch_size`: **Not required** (uses full likelihood evaluation)
+        - `temperature`: **Initial `1.0`, cooling rate `0.99`** (default)
+        - `perturbation step size`: **0.1** (default, can be tuned)
+        - (Simulated Annealing is useful for **non-convex likelihood surfaces**)
+
+
+        Parameters
+        ----------
+        sampling_type : str
+            Optimization method: 'SGD', 'L-BFGS', 'Newton', or 'Simulated Annealing'.
+        num_samples : int, optional
+            Number of parameter initializations to optimize. Default is `1000`.
+        num_iterations : int, optional
+            Number of iterations for the optimization algorithm. Default is `500`.
+        learning_rate : float, optional
+            Learning rate (used for SGD and Newt’s method). Default is `0.01`.
+        batch_size : int, optional
+            Size of minibatches for stochastic gradient estimation. Default is `None` (full-batch).
+        key : jax.random.PRNGKey, optional
+            Random key for reproducibility. Default is a fixed seed.
+        derivative : str, optional
+            - `'analytic'`: Uses manually computed gradients.
+            - `'auto'`: Uses automatic differentiation via `jax.grad()`.
+            Default is `'analytic'`.
+        analyse_results : bool, optional
+            If `True`, computes and visualizes statistics of estimated MLE parameters.
+
+        Returns
+        -------
+        dict
+            Dictionary containing:
+            - `"best_params"` : dict, the best parameter set found.
+            - `"max_log_likelihood"` : float, the corresponding maximum log-likelihood value.
+        """
+
+        # Ensure that the sampling type is valid
+        if sampling_type not in ['SGD', 'L-BFGS', 'Newton', 'Simulated Annealing', 'Adam']:
+            raise ValueError("sampling_type must be one of ['SGD', 'L-BFGS', 'Newton', 'Simulated Annealing'].")
+        
+        # Ensure that if plotting history it is simply a single optimisation
+        if plot_history and num_samples > 1:
+            raise ValueError("Plot of log-likelihood history is only supported for single sample optimisation as an overview of the training process.")
+        
+        # Allow for either stochastic or full batch gradient computation
+        # If batch size is provided, ensure it is valid - ie less than total number of data points
+        if batch_size is not None and batch_size > self.data.shape[0]:
+                raise ValueError(f"Batch size cannot exceed the total number of data points: {self.data.shape[0]}.")
+
+        # Allow user to choose between automatic and analytical gradients - analytical is default as shown to be faster and more memory efficient
+        if derivative not in ['analytic', 'auto']:
+            raise ValueError("Derivative method must be either 'analytic' or 'auto'.")
+        
+        # Ensure a valid key is available to the function
+        if key is None:
+            key = jax.random.PRNGKey(42)
+        else:
+            key = jax.random.PRNGKey(key)
+        
+        # Initialize a list to store the trajectory of parameter estimates and log-likelihoods - allows them to be analysed later
+        all_results = [] 
+
+        # As this is only every used for single sample optimisation can be initialised globally here
+        if plot_history:
+            all_results_log_likelihood = []
+
+            def _plot_log_likelihood_history(all_results_log_likelihood):
+                """Plot the log-likelihood history, removing the first 10% of iterations for clarity."""
+
+                # Remove first 20% of iterations
+                num_iterations = len(all_results_log_likelihood)
+                cutoff = max(1, int(0.2 * num_iterations)) 
+                plot_data = all_results_log_likelihood[cutoff:]
+
+                # Set high-quality plot settings
+                plt.figure(figsize=(8, 6), dpi=300) 
+                sns.set_context("talk")  
+                sns.set_style("whitegrid") 
+
+                # Plot log-likelihood history
+                plt.plot(plot_data, linestyle='-', color='darkblue', linewidth=2, alpha=0.8, label="Negative Log-Likelihood")
+
+                # Labels and formatting
+                plt.xlabel("Iterations", fontsize=12, fontweight='bold')
+                plt.ylabel("Negative Log-Likelihood", fontsize=12, fontweight='bold')
+                plt.title("Log-Likelihood Convergence", fontsize=12, fontweight='bold', pad=15)
+                plt.yscale("log")
+                plt.grid(which="both", linestyle="--", linewidth=0.7, alpha=0.6)
+                plt.xticks(fontsize=10)
+                plt.yticks(fontsize=10)
+                plt.tight_layout()
+                plt.legend(fontsize=10)
+                plt.show()
+
+        # Define the loss function to be minimized - negative log-likelihood
+        def loss_fn(params, data_subset):
+            """Negative log-likelihood function that will be minimised."""
+            return -self.likelihood(params["N"], params["r"], params["x0"], params["y0"], params["alpha"], params["sigma"], 
+                                    log=True, data=data_subset)
+        
+        # Define the gradient function based on user choice for relevant methods
+        if sampling_type in ['SGD', 'L-BFGS', 'Newton', 'Adam']:
+            if derivative == 'auto':
+                grad_fn = jax.grad(loss_fn)
+            else:
+                def grad_fn(params, data_subset):
+                    """Derivative Negative log-likelihood function that will be minimised."""
+                    grads = self.analytic_grad_loglikelihood(params["N"], params["r"], params["x0"], params["y0"], params["alpha"], 
+                                                            params["sigma"], data=data_subset)
+                    # tree_map negates each element of the dictionary returned by previously defined function
+                    return jtu.tree_map(lambda x: -x, grads)
+        
+        # Define the hessian function using jax automatic differentiation
+        if sampling_type == 'Newton': 
+            hessian_fn = jax.hessian(loss_fn)
+
+        # Sample from the priors simply as initialisation position for MLE optimisation
+        # All initial samples are retrieved in one go
+        prior_samples = self.sample_from_priors(key, num_samples=num_samples)
+
+        # ------------------ Stochastic Gradient Descent ------------------
+
+        if sampling_type == 'SGD':
+
+            # Define the optimiser and initialise it with the learning rate - optax
+            optimizer = optax.sgd(learning_rate)
+
+            # Loop over all num_samples and optimise each one
+            for i in tqdm(range(num_samples), desc="Optimizing MLE using SGD:", leave=True):
+
+                # Extract the parameters for the current sample from the dictionary - ensure they are jnp arrays
+                params = {k: jnp.array(v[i]) for k, v in prior_samples.items()}
+
+                # Enter initial state for the optimiser
+                opt_state = optimizer.init(params)
+
+                # Run the SGD loop for num_iterations 
+                for _ in range(num_iterations):
+
+                    # Store the log-likelihood history for each iteration
+                    if plot_history:
+                        all_results_log_likelihood.append(loss_fn(params, self.data))
+
+                    data_subset = self.data if batch_size is None else self.data.sample(batch_size)
+                    grads = grad_fn(params, data_subset)
+                    updates, opt_state = optimizer.update(grads, opt_state)
+                    params = optax.apply_updates(params, updates)
+
+                # Plot the log-likelihood history using the function defined above
+                if plot_history:
+                    _plot_log_likelihood_history(all_results_log_likelihood)
+
+                # Ensure that alpha is within [-π, π]
+                params["alpha"] = (params["alpha"] + jnp.pi) % (2 * jnp.pi) - jnp.pi
+
+                # Convert from minimised negative log-likelihood to log-likelihood (maximised)
+                final_log_likelihood = -loss_fn(params, self.data)
+
+                # Store the final parameter estimates and log-likelihood
+                all_results.append({"params": params, "log_likelihood": final_log_likelihood})
+
+
+        # ------------------ Adam Optimizer ------------------
+
+        if sampling_type == 'Adam':
+
+            # Define the Adam optimizer and initialize it with the learning rate
+            optimizer = optax.adam(learning_rate)
+
+            # Loop over all num_samples and optimize each one
+            for i in tqdm(range(num_samples), desc="Optimizing MLE using Adam:", leave=True):
+
+                # Extract the parameters for the current sample from the dictionary - ensure they are jnp arrays
+                params = {k: jnp.array(v[i]) for k, v in prior_samples.items()}
+
+                # Initialise the optimizer state
+                opt_state = optimizer.init(params)
+
+                # Run the Adam optimization loop for num_iterations
+                for iteration in range(num_iterations):
+
+                    # Store the log-likelihood history for tracking
+                    if plot_history:
+                        all_results_log_likelihood.append(loss_fn(params, self.data))
+
+                    # Sample mini-batch if batch_size is set
+                    data_subset = self.data if batch_size is None else self.data.sample(batch_size)
+                    grads = grad_fn(params, data_subset)
+                    updates, opt_state = optimizer.update(grads, opt_state)
+                    params = optax.apply_updates(params, updates)
+
+                # Plot the log-likelihood history if enabled
+                if plot_history:
+                    _plot_log_likelihood_history(all_results_log_likelihood)
+
+                # Ensure that alpha is within [-π, π]
+                params["alpha"] = (params["alpha"] + jnp.pi) % (2 * jnp.pi) - jnp.pi
+
+                # Convert from minimized negative log-likelihood to log-likelihood (maximized)
+                final_log_likelihood = -loss_fn(params, self.data)
+
+                # Store the final parameter estimates and log-likelihood
+                all_results.append({"params": params, "log_likelihood": final_log_likelihood})
+
+        # ------------------ L-BFGS ------------------
+        
+        if sampling_type == 'L-BFGS':
+            for i in tqdm(range(num_samples), desc="Optimizing MLE using L-BFGS:", leave=True):
+
+                # Extract the parameters for the current sample from the dictionary - ensure they are jnp arrays
+                params = {k: jnp.array(v[i]) for k, v in prior_samples.items()}
+
+                def objective_fn(p):
+                    """Computes the negative log-likelihood over a batch."""
+                    data_subset = self.data if batch_size is None else self.data.sample(batch_size)
+                    return loss_fn(dict(zip(params.keys(), p)), data_subset)
+
+                def objective_grad_fn(p):
+                    """Computes the gradient of the negative log-likelihood over a batch."""
+                    data_subset = self.data if batch_size is None else self.data.sample(batch_size)
+                    grads = grad_fn(dict(zip(params.keys(), p)), data_subset)
+                    return jnp.concatenate([grads[k].flatten() for k in grads.keys()])  # Convert dict to flat array
+
+                # Track training progress
+                training_log = []
+
+                def callback(p):
+                    """Callback function to track log-likelihood progress during training."""
+                    log_likelihood = -objective_fn(p)  # Convert back to log-likelihood
+                    training_log.append(log_likelihood)
+                    print(f"Iteration {len(training_log)}: Log-Likelihood = {log_likelihood:.4f}")
+
+                # Convert initial params to a flat array
+                initial_params = jnp.concatenate([params[k].flatten() for k in params.keys()])
+
+                # Run L-BFGS optimizer from SciPy with callback tracking
+                result = minimize(fun=objective_fn, x0=initial_params, jac=objective_grad_fn, 
+                                method='L-BFGS-B', options={'maxiter': num_iterations},
+                                callback=callback)  # Track optimization progress
+
+                # Convert optimized flat array back to dictionary format
+                optimized_params = dict(zip(params.keys(), jnp.split(result.x, [params[k].size for k in params.keys()][:-1])))
+
+                # Ensure that alpha is within [-π, π]
+                optimized_params["alpha"] = (optimized_params["alpha"] + jnp.pi) % (2 * jnp.pi) - jnp.pi
+
+                # Convert from minimized negative log-likelihood to log-likelihood (maximized)
+                final_log_likelihood = -objective_fn(result.x)
+
+                # Store the final parameter estimates and log-likelihood
+                all_results.append({"params": optimized_params, "log_likelihood": final_log_likelihood})
+
+                # Plot training log-likelihood history
+                if plot_history:
+                    _plot_log_likelihood_history(all_results_log_likelihood)
+
+        # ------------------ Newton's Method ------------------
+
+        if sampling_type == 'Newton':
+            for i in tqdm(range(num_samples), desc="Optimizing MLE using Newton's Method:", leave=True):
+
+                # Extract the parameters for the current sample from the dictionary - ensure they are jnp arrays
+                params = {k: jnp.array(v[i]) for k, v in prior_samples.items()}
+
+                for _ in range(num_iterations):
+
+                    # Store the log-likelihood history for each iteration
+                    if plot_history:
+                        all_results_log_likelihood.append(loss_fn(params, self.data))
+
+                    data_subset = self.data if batch_size is None else self.data.sample(batch_size)
+                    grads = grad_fn(params, data_subset)
+                    hessian = hessian_fn(params, data_subset)
+                    # Add Regularisation to make more stable inverse
+                    hessian_inv = jnp.linalg.inv(hessian + 1e-6 * jnp.eye(len(params)))
+                    params = {k: v - jnp.dot(hessian_inv, grads[k]) for k, v in params.items()}
+
+                # Plot the log-likelihood history using the function defined above
+                if plot_history:
+                    _plot_log_likelihood_history(all_results_log_likelihood)
+
+                # Ensure that alpha is within [-π, π]
+                params["alpha"] = (params["alpha"] + jnp.pi) % (2 * jnp.pi) - jnp.pi
+
+                # Convert from minimised negative log-likelihood to log-likelihood (maximised)
+                final_log_likelihood = -loss_fn(params, self.data)
+
+                # Store the final parameter estimates and log-likelihood
+                all_results.append({"params": params, "log_likelihood": final_log_likelihood})
+
+
+        # ------------------ Simulated Anealing ------------------
+
+        if sampling_type == 'Simulated Annealing':
+            for i in tqdm(range(num_samples), desc="Optimizing MLE using Simulated Annealing:", leave=True):
+
+                # Extract the parameters for the current sample from the dictionary - ensure they are jnp arrays
+                params = {k: jnp.array(v[i]) for k, v in prior_samples.items()}
+
+                # Define the objective function: negative log-likelihood (since we are minimizing)
+                def objective_fn(p):
+                    data_subset = self.data if batch_size is None else self.data.sample(batch_size)
+                    return -self.likelihood(p["N"], p["r"], p["x0"], p["y0"], p["alpha"], p["sigma"], log=True, data=data_subset)
+
+                # Simulated Annealing hyperparameters
+                temperature = 1.0  
+                cooling_rate = 0.99  
+                best_params = params
+                best_score = objective_fn(params)
+                accepted_moves = 0  # Track how many worse solutions are accepted
+
+                for iteration in range(num_iterations):
+                    # Generate a new candidate by applying small random noise
+                    new_params = {k: v + 0.1 * jax.random.normal(key, v.shape) for k, v in params.items()}
+                    new_score = objective_fn(new_params)
+
+                    # Check if the new score is valid (avoid NaN or Inf)
+                    if jnp.isnan(new_score) or jnp.isinf(new_score):
+                        continue  # Skip this iteration and generate a new candidate
+
+                    # Accept new parameters if the score is better or with probability exp(-ΔE / T)
+                    delta = new_score - best_score
+                    if delta < 0 or jax.random.uniform(key) < jnp.exp(-delta / temperature):
+                        params = new_params  # Accept new parameters
+                        best_score = new_score
+                        accepted_moves += 1
+
+                    # Gradual cooling schedule
+                    temperature = 1.0 / (1 + iteration)  
+
+                # Ensure that alpha is within [-π, π]
+                params["alpha"] = (params["alpha"] + jnp.pi) % (2 * jnp.pi) - jnp.pi
+
+                # Convert from minimized negative log-likelihood to log-likelihood (maximized)
+                final_log_likelihood = -best_score
+
+                # Store the final parameter estimates and log-likelihood
+                all_results.append({"params": params, "log_likelihood": final_log_likelihood})
+
+            # Log acceptance rate
+            logging.info(f"Simulated Annealing Acceptance Rate: {accepted_moves / (num_samples * num_iterations):.2f}")
+
+        
+
+        # Apply a filter on all results that removed any unphysical values - ie N < 0 or r < 0
+        filtered_results = [entry for entry in all_results if entry["params"]["N"] > 0 and entry["params"]["r"] > 0]
+        num_removed = num_samples - len(filtered_results)
+        logging.info(f"Removed {num_removed}/{num_samples} MLE estimates due to unphysical values (N or r < 0).")
+        if not filtered_results:
+            raise RuntimeError("All estimated parameters were invalid. Consider adjusting priors.")
+        
+        # Find the best result based on maximum log-likelihood
+        best_result = max(filtered_results, key=lambda x: x["log_likelihood"])
+
+        if analyse_results:
+            logging.info("Running Analysis on MLE Results...")
+            self._analyse_mle_results(filtered_results)
+
+        return filtered_results
+
+        # return {"best_params": best_result["params"], "max_log_likelihood": best_result["log_likelihood"]}
+    
+
+    # ------------------ Analyse MLE Results ------------------
+
+    def _analyse_mle_results(self, mle_results):
+        """
+        Analyses Maximum Likelihood Estimation (MLE) results by:
+        - Identifying the best log-likelihood estimate
+        - Computing gradients at the best estimates (top 20%)
+        - Finding the top 20% of log-likelihoods
+        - Plotting histograms of log-likelihoods, gradients, and parameters.
+
+        Parameters
+        ----------
+        mle_results : list of dict
+            Each dictionary contains:
+            - `"params"`: A dictionary of parameter estimates.
+            - `"log_likelihood"`: The log-likelihood value.
+        """
+
+        if not mle_results:
+            raise ValueError("No MLE results provided for analysis.")
+
+        # Convert results into structured format
+        log_likelihoods = np.array([entry["log_likelihood"] for entry in mle_results])
+
+        # Separate scalar parameters from vector parameters
+        param_dict = {}
+        for key in mle_results[0]["params"]:
+            values = np.array([entry["params"][key] for entry in mle_results])
+
+            # If the parameter is a vector (e.g., x0, y0, alpha), split into components
+            if values.ndim > 1:
+                for i in range(values.shape[1]):
+                    param_dict[f"{key}_{i+1}"] = values[:, i]
+            else:
+                param_dict[key] = values
+
+        # ------------------ Best Log-Likelihood and Gradients ------------------
+
+        # Find the best MLE estimate
+        best_idx = np.argmax(log_likelihoods)
+        best_params = mle_results[best_idx]["params"]
+        best_log_likelihood = log_likelihoods[best_idx]
+
+        logging.info(f"Best MLE estimate found at index {best_idx} with log-likelihood = {best_log_likelihood:.4f}")
+
+        # Compute gradient at best estimate (if gradient function is available)
+        try:
+            best_gradient = self.analytic_grad_loglikelihood(**best_params, data=self.data)
+            gradient_values = np.concatenate([v.flatten() for v in best_gradient.values()])
+            gradient_values_mag = np.linalg.norm(gradient_values)
+            logging.info(f"Gradient at best MLE estimate found to be magnitude: {gradient_values_mag:.4f}")
+
+        except Exception as e:
+            best_gradient = None
+            logging.info("Gradient computation failed:", e)
+
+
+        # ------------------ Top 20% of Log-Likelihoods ------------------
+        cutoff = np.percentile(log_likelihoods, 80)  # Find 80th percentile threshold
+        top_20_mask = log_likelihoods >= cutoff  # Selects the least negative log-likelihoods (best fits)
+        
+        # Store the top 20% of parameters
+        top_20_params = {key: values[top_20_mask] for key, values in param_dict.items()}
+        top_20_log_likelihoods = log_likelihoods[top_20_mask]
+
+        logging.info(f"Top 20% of best log-likelihoods have values above {cutoff:.4f}")
+
+        # ------------------ Compute Gradient Magnitudes for Top 20% ------------------
+
+        gradient_magnitudes = []
+        for i, entry in enumerate(mle_results):
+            if top_20_mask[i]:  # Only compute for top 20% subset
+                try:
+                    gradient = self.analytic_grad_loglikelihood(**entry["params"], data=self.data)
+                    grad_vector = np.concatenate([v.flatten() for v in gradient.values()])  # Flatten to vector
+                    grad_magnitude = np.linalg.norm(grad_vector)  # Compute L2 norm
+                    gradient_magnitudes.append(grad_magnitude)
+                except Exception as e:
+                    logging.warning(f"Skipping gradient for sample {i}: {e}")
+
+        gradient_magnitudes = np.array(gradient_magnitudes)  # Convert to NumPy array for plotting
+
+        # ------------------ Plots: Filtered Log-Likelihood Distribution ------------------
+
+        plt.figure(figsize=(8, 6), dpi=300)
+        sns.histplot(top_20_log_likelihoods, bins=15, kde=True, color="darkblue")
+        plt.xlabel("Log-Likelihood", fontsize=14)
+        plt.ylabel("Frequency", fontsize=14)
+        plt.title("Distribution of Log-Likelihoods (Top 20%)", fontsize=16, fontweight="bold")
+        plt.grid(True, linestyle="--", alpha=0.6)
+        plt.show()
+
+        # ------------------ Plots: Gradient Magnitude Distribution ------------------
+
+        if len(gradient_magnitudes) > 0:
+            plt.figure(figsize=(8, 6), dpi=300)
+            sns.histplot(gradient_magnitudes, bins=20, kde=True, color="purple")
+            plt.xlabel("Gradient Magnitude", fontsize=14)
+            plt.ylabel("Frequency", fontsize=14)
+            plt.title("Gradient Magnitude Distribution (Top 20%)", fontsize=16, fontweight="bold")
+            plt.grid(True, linestyle="--", alpha=0.6)
+            plt.show()
+        else:
+            logging.info("Skipping gradient magnitude plot: No valid gradients found.")
+
+        # ------------------ Plots: Parameter Distributions ------------------
+
+        num_params = len(top_20_params)
+        fig, axes = plt.subplots(nrows=num_params, figsize=(8, 3 * num_params), dpi=300)
+
+        if num_params == 1:
+            axes = [axes]  # Ensure it's iterable
+
+        for ax, (param, values) in zip(axes, top_20_params.items()):
+            sns.histplot(values.flatten(), ax=ax, kde=True, bins=30, color="green")
+            ax.set_title(f"Distribution of {param} (Top 20%)", fontsize=14, fontweight="bold")
+            ax.set_xlabel(param, fontsize=12)
+            ax.set_ylabel("Frequency", fontsize=12)
+            ax.grid(True, linestyle="--", alpha=0.6)
+        plt.tight_layout()
+        plt.show()
+
+        # ------------------ Display Summary Table ------------------
+
+        return None
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            # # Convert trajectory to structured format for analysis
+            # filtered_resultls_reord = {key: np.array([entry["params"][key] for entry in filtered_results])
+            #     for key in filtered_results[0]["params"]}
+            
+            # logging.info("Filtering outliers before analysis...")
+            
+            # # Apply outlier detection only for analysis (not for finding best params)
+            # filter_mask = self._detect_outliers_mle(filtered_resultls_reord)
+            # param_trajectory_filtered = {key: values[filter_mask] for key, values in filtered_resultls_reord.items()}
+            
+            # self._analyse_mle_results(param_trajectory_filtered)
+            # self._plot_mle_distributions(param_trajectory_filtered)
+
+
+    
+
+    # def _analyse_mle_results(self, mle_results_filtered):
+    #     """Computes and displays mean and variance of parameters across valid MLE runs, removing entire runs if any parameter is extreme."""
+    #     # Initialize a dictionary to store statistics
+    #     stats_dict = {}
+
+    #     for param, values in mle_results_filtered.items():
+    #         if values.ndim == 1:
+    #             # Scalar parameters (N, r, sigma)
+    #             stats_dict[param] = {
+    #                 "Mean": np.mean(values),
+    #                 "Variance": np.var(values)
+    #             }
+    #         else:
+    #             # Vector parameters (x0, y0, alpha) – process each component separately
+    #             for i in range(values.shape[1]):
+    #                 stats_dict[f"{param}_{i+1}"] = {
+    #                     "Mean": np.mean(values[:, i]),
+    #                     "Variance": np.var(values[:, i])
+    #                 }
+
+    #     # Convert to a DataFrame for a cleaner display
+    #     stats_df = pd.DataFrame(stats_dict).T
+    #     display(stats_df)
+        
+    #     return None
+
+
+    # def _plot_mle_distributions(self, mle_results_filtered):
+    #     """
+    #     Plots histograms of MLE-estimated parameters, removing entire MLE estimates if any parameter is an outlier.
+    #     """
+
+    #     # Flatten vector parameters (x0, y0, alpha)
+    #     flattened_params = {}
+
+    #     for param, values in mle_results_filtered.items():
+    #         if values.ndim == 1:
+    #             # Scalar parameters (N, r, sigma)
+    #             flattened_params[param] = values
+    #         else:
+    #             # Vector parameters (x0, y0, alpha) – store each component separately
+    #             for i in range(values.shape[1]):
+    #                 flattened_params[f"{param}_{i+1}"] = values[:, i]
+
+    #     # Plot each parameter's histogram
+    #     num_params = len(flattened_params)
+    #     fig, axes = plt.subplots(nrows=num_params, figsize=(8, 3 * num_params))
+
+    #     if num_params == 1:
+    #         axes = [axes]
+
+    #     for ax, (param, values) in zip(axes, flattened_params.items()):
+    #         sns.histplot(values, ax=ax, kde=True, bins=30)
+    #         ax.set_title(f"Distribution of {param} (Outliers Removed)")
+    #         ax.set_xlabel(param)
+    #         ax.set_ylabel("Frequency")
+
+    #     plt.tight_layout()
+    #     plt.show()
+        
+    #     return None
+
+
+        # def _detect_outliers_mle(self, mle_results, lower_percentile=0.1, upper_percentile=99.9):
+    #     """
+    #     Identifies MLE runs containing at least one extreme parameter based on percentile-based filtering.
+
+    #     Parameters
+    #     ----------
+    #     mle_results : dict of np.ndarrays
+    #         Dictionary where each key corresponds to a parameter and each value is an array of shape `(num_samples,)` or `(num_samples, dim)`.
+    #     lower_percentile : float, optional
+    #         The lower percentile threshold (default is 10th percentile).
+    #     upper_percentile : float, optional
+    #         The upper percentile threshold (default is 90th percentile).
+
+    #     Returns
+    #     -------
+    #     valid_mask : np.ndarray
+    #         Boolean mask where `True` indicates a valid MLE estimate and `False` indicates an outlier.
+    #     """
+    #     num_samples = len(next(iter(mle_results.values())))
+    #     valid_mask = np.ones(num_samples, dtype=bool)
+
+    #     for param, values in mle_results.items():
+    #         lower_bound = np.percentile(values, lower_percentile)
+    #         upper_bound = np.percentile(values, upper_percentile)
+
+    #         if values.ndim == 1:
+    #             valid_mask &= (values >= lower_bound) & (values <= upper_bound)
+    #         else:
+    #             for i in range(values.shape[1]):
+    #                 valid_mask &= (values[:, i] >= lower_bound) & (values[:, i] <= upper_bound)
+        
+    #     logging.info(f"Removed {num_samples - sum(valid_mask)} extreme MLE estimates out of {num_samples}.")
+    #     return valid_mask
+            
+
 
 
     def NumPryo_model(self):
