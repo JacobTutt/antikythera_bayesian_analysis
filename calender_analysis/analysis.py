@@ -48,20 +48,46 @@ logging.basicConfig(level=logging.INFO,  format="%(asctime)s - %(levelname)s - %
 class Calender_Analysis:
     def __init__(self, data, model_type="anisotropic", filtering = 'None', priors=None, num_cores = 4):
         """
-        Initializes the Bayesian model for the calendar ring.
+        Initializes the Bayesian model for analyzing hole positions on a fragmented calendar ring.
+
+        This class models the hole positions using a probabilistic framework and supports
+        different error models, priors, and data filtering options. The model can be configured
+        to run on multiple CPU cores for parallel MCMC sampling.
 
         Parameters
         ----------
-        data : pd.DataFrame
-            The observed hole position data.
-        model_type : str, optional
-            The error model type. Can be:
-            - "isotropic": Uses a single `sigma` for errors.
-            - "anisotropic" (default): Uses `sigma_r` and `sigma_t` for radial/tangential errors.
+        data : str, pd.DataFrame, or np.ndarray
+            The observed hole position data. It can be provided as:
+            - A file path (CSV, TXT, or DAT) containing the data.
+            - A Pandas DataFrame.
+            - A NumPy array (converted to a DataFrame).
+        model_type : str, optional, default="anisotropic"
+            Specifies the error model used:
+            - "isotropic": Uses a single `sigma` parameter for errors.
+            - "anisotropic": Uses separate `sigma_r` and `sigma_t` for radial and tangential errors.
+        filtering : str, optional, default="None"
+            Defines the filtering applied to the dataset:
+            - "None": No filtering.
+            - "Basic": Removes sections with only one hole.
+            - "Full": Removes sections with fewer than three holes and discards the first and last hole in each section.
         priors : dict, optional
-            A dictionary defining prior distributions for the model parameters.
-            - Entries include: "N", "r", "x0", "y0", "alpha", "sigma", "sigma_r", "sigma_t
-            If None, default priors are used.
+            A dictionary specifying prior distributions for the model parameters. If `None`, default priors are used.
+            The dictionary can include:
+            - "N" (total number of holes)
+            - "r" (radius of the ring)
+            - "x0", "y0" (x and y offsets of sections)
+            - "alpha" (angular offsets)
+            - "sigma", (istropic error terms)
+            - "sigma_r", "sigma_t" (anistropic error terms)
+        num_cores : int, optional, default=4
+            The number of CPU cores to use for parallel processing with JAX.
+
+        Raises
+        ------
+        ValueError
+            If `model_type` or `filtering` contains an invalid value.
+        RuntimeError
+            If JAX fails to configure the requested number of CPU cores.
         """
 
         # Try to set JAX to use multiple devices for parallel chains for faster execution
@@ -81,19 +107,6 @@ class Calender_Analysis:
             logging.error(f"Error configuring JAX for parallel execution: {str(e)}")
             logging.info("Unable to set the number of host devices. Falling back to default single-device execution.")
 
-            
-        self.data = self._load_data(data, filtering)
-        self.model_type = model_type
-        self.num_sections = len(self.data["Section ID"].unique())
-        self.n_holes = len(self.data["Hole"].unique())
-
-
-        #Import relevent data as class atributes store as jax arrays for efficient computation later
-        self.section_ids_obs = jnp.array(self.data["Section ID"].values)
-        self.hole_nos_obs = jnp.array(self.data["Hole"].values)
-        self.x_obs = jnp.array(self.data["Mean(X)"].values)
-        self.y_obs = jnp.array(self.data["Mean(Y)"].values)
-
         # Validate filtering type
         if filtering not in ["None", "Basic", "Full"]:
             raise ValueError("Invalid filtering type. Choose either 'None', 'Basic', or 'Full'.")
@@ -102,16 +115,30 @@ class Calender_Analysis:
             raise ValueError("Invalid model_type. Choose either 'anisotropic' or 'isotropic'.")
         self.model_type = model_type
 
-        # Default priors if none provided
+        # Import data and store with metadata
+        self.data = self._load_data(data, filtering)
+        self.model_type = model_type
+        self.num_sections = len(self.data["Section ID"].unique())
+        self.n_holes = len(self.data["Hole"].unique())
+
+        #Import relevent data as class atributes store as jax arrays for efficient computation later
+        self.section_ids_obs = jnp.array(self.data["Section ID"].values)
+        self.hole_nos_obs = jnp.array(self.data["Hole"].values)
+        self.x_obs = jnp.array(self.data["Mean(X)"].values)
+        self.y_obs = jnp.array(self.data["Mean(Y)"].values)
+
+        # Default priors if none provided - these can be individually overridden
         default_priors = {
             "N": dist.Uniform(340, 370),
             "r": dist.Uniform(65, 85),
             "x0": dist.Normal(80, 5),
             "y0": dist.Normal(135, 5),
             "alpha": dist.Normal(-2.5, 1),
-            "sigma": dist.Uniform(0, 5),  # For isotropic
-            "sigma_r": dist.Uniform(0, 5), # For anisotropic
-            "sigma_t": dist.Uniform(0, 5),  # For anisotropic
+            # For isotropic
+            "sigma": dist.Uniform(0, 5), 
+            # For anisotropic
+            "sigma_r": dist.Uniform(0, 5),
+            "sigma_t": dist.Uniform(0, 5),
         }
 
         # Use user-defined priors if provided, otherwise use default priors
@@ -121,46 +148,39 @@ class Calender_Analysis:
     
     def _load_data(self, data, filtering=False):
         """
-        Load the hole position data from various formats, convert it into a Pandas DataFrame, 
-        and ensure it is properly sorted by hole number.
+        Loads, validates, and optionally filters the hole position data.
 
-        This method supports input in the form of:
-        - A file path pointing to a CSV, TXT, or DAT file.
-        - A Pandas DataFrame containing the hole position data.
-        - A NumPy array, which will be converted into a Pandas DataFrame.
-
-        The dataset must contain the following required columns:
-        - "Section ID": Identifies the section of the calendar ring.
-        - "Hole": The hole index number.
-        - "Inter-hole Distance": Distance between consecutive holes.
-        - "Mean(X)": X-coordinate of the hole's mean position.
-        - "Mean(Y)": Y-coordinate of the hole's mean position.
-
-        If `filtering=True`, sections with only **one hole** are removed, and the remaining sections 
-        are **renumbered sequentially** (1,2,3...).
+        This method ensures the data is correctly formatted and sorted by hole number.
+        It supports multiple input formats (file, DataFrame, NumPy array) and applies optional
+        filtering to clean the dataset.
 
         Parameters
         ----------
         data : str, pd.DataFrame, or np.ndarray
-            The input data, which can be a file path, a Pandas DataFrame, or a NumPy array.
-        filtering : bool, optional
-            If `True`, removes sections with only one hole and relabels sections sequentially.
+            The input dataset. It can be:
+            - A file path (CSV, TXT, or DAT).
+            - A Pandas DataFrame.
+            - A NumPy array (converted to a DataFrame).
+        filtering : str, optional, default="None"
+            Determines how data is filtered:
+            - "None": No filtering applied.
+            - "Basic": Removes sections with only one hole.
+            - "Full": Removes sections with fewer than three holes and discards the first and last hole in each section.
 
         Returns
         -------
         pd.DataFrame
-            A Pandas DataFrame containing the loaded, sorted, and optionally filtered hole position data.
+            A cleaned and sorted DataFrame containing the hole position data.
 
         Raises
         ------
         ValueError
-            If the required columns are missing or if the file format is unsupported.
+            If the required columns are missing or the file format is unsupported.
         TypeError
-            If the input data format is not one of the supported types.
+            If the input data format is not a string, DataFrame, or NumPy array.
         RuntimeError
-            If there is an issue reading the file.
+            If an error occurs while loading the file.
         """
-
         # Required columns for the data and analysis
         required_columns = {"Section ID", "Hole", "Inter-hole Distance", "Mean(X)", "Mean(Y)"}
         
@@ -217,56 +237,61 @@ class Calender_Analysis:
                 # Identify first and last hole per section
                 first_last_holes = df.groupby("Section ID")["Hole"].agg(["min", "max"]).reset_index()
 
-                # Create a mask to remove first and last holes of each section
+                # Remove first and last holes of each section using Masking
                 mask = ~df.apply(lambda row: row["Hole"] in first_last_holes.loc[first_last_holes["Section ID"] == row["Section ID"], ["min", "max"]].values, axis=1)
                 df = df[mask]
 
-            # Renumber sections sequentially (starting from 1)
+            # Renumber sections sequentially - this removes unecessary gaps and stops constant calculation of unpopulated sections
             section_mapping = {old: new + 1 for new, old in enumerate(sorted(valid_sections))}
             df["Section ID"] = df["Section ID"].map(section_mapping)
 
         # Sort data by hole number for proper ordering after filtering
         df = df.sort_values(by=["Section ID", "Hole"]).reset_index(drop=True)
 
-        # -------------------- Print summary of data --------------------
+        # -------------------- Print summary of imported data --------------------
         # In a data frame display hole range for each section
         section_summary = df.groupby("Section ID")["Hole"].agg(["min", "max"])
         section_summary["Hole Range"] = section_summary["min"].astype(str) + " - " + section_summary["max"].astype(str)
-
-        # Generate section summary manually to ensure proper alignment
         section_summary_str = "\n".join(
             f"      {section:<7}|   {row['Hole Range']}" 
-            for section, row in section_summary.iterrows()
-)
+            for section, row in section_summary.iterrows())
 
-
-        logging.info(f""" \n===============================\n        DATA SUMMARY\n===============================\nTotal Sections   : {df['Section ID'].nunique()}\nTotal Holes      : {df['Hole'].nunique()}\n---------------------------------\nSection ID   |   Hole Range \n--------------------------------- \n{section_summary_str} \n---------------------------------
-        """)
+        logging.info(f" \n===============================" + 
+                     "\n        DATA SUMMARY"+
+                     "\n===============================" +
+                     "\nTotal Sections   : {df['Section ID'].nunique()}" +
+                     "\nTotal Holes      : {df['Hole'].nunique()}" +
+                     "\n---------------------------------" +
+                     "\nSection ID   |   Hole Range " +
+                     "\n--------------------------------- " +
+                     "\n{section_summary_str} " +
+                     "\n--------------------------------- ")
 
         return df
         
     
     def plot_hole_locations(self, figsize=(10, 8)):
         """
-        Plots the measured (mean) hole locations in the x-y plane.
-        
-        This function visualizes the hole positions (`Mean(X)`, `Mean(Y)`) from the dataset, 
-        color-coded by `Section ID`. It also includes annotations for hole numbers at regular intervals 
-        and adds perpendicular bisecting lines at section transitions.
+        Plots the measured hole locations in the x-y plane, color-coded by section ID.
+
+        This function provides a visualization of hole positions (`Mean(X)`, `Mean(Y)`) from the dataset. 
+        It uses color-coded markers for different sections, adds annotations for hole numbers at regular 
+        intervals, and marks section transitions with perpendicular bisecting lines.
 
         Features:
+        ---------
         - **Color-coded markers**: Each section ID is assigned a unique color.
-        - **Different marker styles**: Cycles between circle, square, and triangle markers.
+        - **Different marker styles**: Cycles through circle, square, and triangle markers.
         - **Annotations**: Labels every third hole with its hole number.
         - **Section transition markers**: Red dashed perpendicular bisecting lines indicate section changes.
         - **Multiple legends**:
-          - Section ID legend.
-          - Bisector legend listing splits with corresponding hole numbers.
+        - Section ID legend.
+        - Bisector legend listing splits with corresponding hole numbers.
 
         Parameters
         ----------
-        figsize : tuple, optional
-            The figure size in inches, default is (10, 8).
+        figsize : tuple, optional, default=(10, 8)
+            The figure size in inches.
 
         Returns
         -------
@@ -371,15 +396,16 @@ class Calender_Analysis:
 
         plt.show()
 
-    def hole_positions(self, N, r, x0, y0, alpha, section_ids = None , hole_nos = None):
+    def hole_positions(self, N, r, x0, y0, alpha, section_ids=None, hole_nos=None):
         """
-        Compute the expected positions of the holes on the calendar ring based on the model parameters.
+        Computes the expected positions of holes on the calendar ring based on model parameters.
 
-        This function calculates the predicted x and y coordinates of holes based on a circular 
-        calendar ring model. The model assumes:
+        This function calculates the predicted x and y coordinates of holes under the assumption that:
         - The ring is circular with radius `r`.
         - The ring originally had `N` evenly spaced holes before fragmentation.
-        - Each section has a relative offset `(x0, y0)` from the center and a rotation `alpha`.
+        - Each section has a relative center `(x0, y0)` and the 0th hole occours at a rotation `alpha`.
+
+        The function can process a single hole or multiple holes at once.
 
         Parameters
         ----------
@@ -393,10 +419,12 @@ class Calender_Analysis:
             The y-offsets for each section.
         alpha : jnp.ndarray
             The angular offsets for each section.
-        section_ids : jnp.ndarray, optional
-            Section IDs for each hole being modeled (default: uses stored dataset values).
-        hole_nos : jnp.ndarray, optional
-            Hole numbers for each hole being modeled (default: uses stored dataset values).
+        section_ids : int, list, or jnp.ndarray, optional
+            The section IDs corresponding to each hole being modeled.
+            If `None`, it defaults to the observed dataset values.
+        hole_nos : int, list, or jnp.ndarray, optional
+            The hole numbers corresponding to each hole being modeled.
+            If `None`, it defaults to the observed dataset values.
 
         Returns
         -------
@@ -407,51 +435,55 @@ class Calender_Analysis:
         Raises
         ------
         ValueError
-            If `section_ids` and `hole_nos` are not the same length.
-            If `N` is not a positive integer.
-            If `r` is not a positive float.
-            If `x0`, `y0`, and `alpha` do not match the number of sections.
+            - If `section_ids` and `hole_nos` do not have the same length.
+            - If `N` is not a positive number.
+            - If `r` is not a positive number.
+            - If `x0`, `y0`, and `alpha` do not match the expected number of sections.
         """
 
-
         # ---- Input Validation ---- #
-        if section_ids.shape != hole_nos.shape:
-            raise ValueError(f"section_ids and hole_nos must have the same shape, got {section_ids.shape} and {hole_nos.shape}.")
 
-        if not isinstance(N, (float, jnp.floating)) or N <= 0:
-            raise ValueError(f"N must be a positive integer, got {N}.")
-
-        if not isinstance(r, (float, jnp.floating)) or r <= 0:
-            raise ValueError(f"r must be a positive float, got {r}.")
-
-        if x0.shape[0] != self.num_sections or y0.shape[0] != self.num_sections or alpha.shape[0] != self.num_sections:
-            raise ValueError(f"x0, y0, and alpha must have length {self.num_sections}, got {x0.shape[0]}, {y0.shape[0]}, and {alpha.shape[0]}.")
-
-        # Convert data to JAX arrays for compatibility with NumPyro
+        # If section_ids or hole_nos are not provided, use the stored dataset values
         if section_ids is None:
             section_ids = self.section_ids_obs
-        else:
-            section_ids = jnp.array(section_ids)
-        
+        section_ids = jnp.atleast_1d(jnp.array(section_ids))  # Convert to JAX array, ensure 1D
 
         if hole_nos is None:
             hole_nos = self.hole_nos_obs
-        else:
-            hole_nos = jnp.array(hole_nos)
-        
-        # Compute expected positions of model from parameters for each hole/ data point
-        # The phi value of each hole is calculated based on the hole number anf the section it belongs to
-        # Hole value - anguluar position in the ring - from fraction of 2 pi based on hole number/ N 
-        # Section value - using alpha gives relative rotation of each section/ anguluar offset
+        hole_nos = jnp.atleast_1d(jnp.array(hole_nos))  # Convert to JAX array, ensure 1D
+
+        # Ensure section_ids and hole_nos have matching shapes
+        if section_ids.shape != hole_nos.shape:
+            raise ValueError(f"section_ids and hole_nos must have the same shape, got {section_ids.shape} and {hole_nos.shape}.")
+
+        # Validate N is a positive integer
+        if not isinstance(N, (float, int, np.floating, jnp.floating)) or N <= 0:
+            raise ValueError(f"N must be a positive value, got {type(N)}.")
+       
+
+        # Validate r is a positive float
+        if not isinstance(r, (float, int, np.floating, jnp.floating)) or r <= 0:
+
+            raise ValueError(f"r must be a positive float, got {type(r)}.")
+
+        # Ensure x0, y0, and alpha match the number of sections
+        if x0.shape[0] != self.num_sections or y0.shape[0] != self.num_sections or alpha.shape[0] != self.num_sections:
+            raise ValueError(f"x0, y0, and alpha must have length {self.num_sections}, got {x0.shape[0]}, {y0.shape[0]}, and {alpha.shape[0]}.")
+
+        # ---- Compute Expected Positions ---- #
+        # The phi value of each hole is calculated based on the hole number and the section it belongs to
+        # Hole value - angular position in the ring - from fraction of 2 pi based on hole number/ N 
+        # Section value - using alpha gives relative rotation of each section/ angular offset
         # List of phi values for each hole
         phi = (2 * jnp.pi * (hole_nos - 1) / N) + alpha[section_ids - 1]
+
         # Expected x and y positions of the hole based on the model - using r, phi, x0, y0
-        # List of modelled x and y values of for each hole
+        # List of modeled x and y values for each hole
         x_model = r * jnp.cos(phi) + x0[section_ids - 1]
         y_model = r * jnp.sin(phi) + y0[section_ids - 1]
 
-        # Stack x and y values to get 2D array of hole positions
-        hole_posn_model = jnp.stack([x_model, y_model], axis=1)
+        # Stack x and y values to get a 2D array of hole positions
+        hole_posn_model = jnp.column_stack((x_model, y_model))
 
         return hole_posn_model
 
@@ -460,7 +492,7 @@ class Calender_Analysis:
         Computes the likelihood (or log-likelihood) of the observed hole positions given model parameters.
 
         This function evaluates how well the observed hole positions match the expected positions 
-        under a **Gaussian error model**. It supports two types of likelihoods:
+        under a Gaussian error model. It supports two types of likelihoods:
 
         - **Isotropic Gaussian**: A single standard deviation `sigma` applies to both x and y errors.
         - **Anisotropic Gaussian**: Separate standard deviations `sigma_r` and `sigma_t` for radial 
@@ -488,8 +520,7 @@ class Calender_Analysis:
         If a subset of data (`data`) is provided, the likelihood is computed over only that subset. 
         This enables efficient **stochastic gradient descent (SGD)** or **mini-batch optimization**.
 
-        ---
-        **Parameters**
+        Parameters
         ----------
         N : float
             The total number of holes in the original (pre-fragmented) calendar ring.
@@ -504,23 +535,27 @@ class Calender_Analysis:
         sigma : float or jnp.ndarray
             - If **isotropic**, a single float `sigma` is used for both x and y errors.
             - If **anisotropic**, a JAX array `[sigma_r, sigma_t]` is used for radial and tangential errors.
-        log : bool, optional
+        log : bool, optional, default=False
             - If `True`, returns the **log-likelihood**.
-            - If `False`, returns the **likelihood**. Default is `False`.
-        neg : bool, optional
+            - If `False`, returns the **likelihood**.
+        neg : bool, optional, default=False
             - If `True`, returns the **negative log-likelihood** (useful for optimization).
-            - Only valid when `log=True`. Default is `False`.
-        data : pd.DataFrame, optional
+            - Only valid when `log=True`.
+        data : pd.DataFrame, optional, default=None
             A subset of the dataset to compute likelihood on. If `None`, the full dataset is used.
             This enables **stochastic optimization** by computing likelihood using **mini-batches**.
 
-        ---
-        **Returns**
+        Returns
         -------
         jnp.ndarray
             - If `log=True, neg=False`: Returns the **log-likelihood**.
             - If `log=True, neg=True`: Returns the **negative log-likelihood**.
             - If `log=False`: Returns the **likelihood** (exponentiated log-likelihood).
+
+        Raises
+        ------
+        ValueError
+            - If `neg=True` but `log=False`, as negative likelihood is only defined for log space.
         """
 
         # This implements a similiar analysis to `hole_positions` 
@@ -618,13 +653,20 @@ class Calender_Analysis:
         
     def grad_likelihood(self, N, r, x0, y0, alpha, sigma, log=True, neg = False, data = None):
         """
-        Computes the gradients of the likelihood or log-likelihood with respect to the model parameters.
+        Computes the gradients of the likelihood or log-likelihood using automatic differentiation.
 
-        This function uses JAX automatic differentiation (`jax.grad()`) to compute:
-        - The gradients of the log-likelihood \( \log L(\mathcal{D} | \theta) \)
-        - The gradients of the likelihood \( L(\mathcal{D} | \theta) \)
+        This function leverages **JAX's automatic differentiation (`jax.grad`)** to compute the gradients 
+        of the **likelihood** or **log-likelihood** with respect to all model parameters. 
 
-        If `neg=True`, it computes the gradients of the **negative log-likelihood** for optimization.
+        - If `log=True`, computes gradients of **log-likelihood**:  
+          \[
+          \frac{\partial \log L}{\partial \theta}
+          \]
+        - If `log=False`, computes gradients of **likelihood**:  
+          \[
+          \frac{\partial L}{\partial \theta}
+          \]
+        - If `neg=True`, returns **negative gradients** for optimization (minimization of negative log-likelihood).
 
         ---
         **Parameters**
@@ -634,35 +676,40 @@ class Calender_Analysis:
         r : float
             Estimated radius of the ring.
         x0 : jnp.ndarray
-            Array of **x-offsets** for each section.
+            Array of **x-offsets** for each section (shape: `num_sections`).
         y0 : jnp.ndarray
-            Array of **y-offsets** for each section.
+            Array of **y-offsets** for each section (shape: `num_sections`).
         alpha : jnp.ndarray
-            Array of **angular offsets** (in radians) for each section.
+            Array of **angular offsets** (in radians) for each section (shape: `num_sections`).
         sigma : float or jnp.ndarray
-            - If **isotropic**, a single float `sigma` is used for both x and y errors.
-            - If **anisotropic**, a JAX array `[sigma_r, sigma_t]` is used for radial and tangential errors.
-        log : bool, optional
+            - If **isotropic**, a single float `sigma` (shared for x and y errors).
+            - If **anisotropic**, a JAX array `[sigma_r, sigma_t]` for radial and tangential errors.
+        log : bool, optional, default=True
             - If `True`, computes gradients of the **log-likelihood**.
-            - If `False`, computes gradients of the **likelihood**. Default is `True`.
-        neg : bool, optional
-            - If `True`, computes gradients of the **negative log-likelihood** for optimization.
-            - Default is `False`.
-        data : pd.DataFrame, optional
-            A subset of the dataset to compute gradients on. If `None`, the full dataset is used.
+            - If `False`, computes gradients of the **likelihood**.
+        neg : bool, optional, default=False
+            - If `True`, computes gradients of the **negative log-likelihood** (useful for optimization).
+        data : pd.DataFrame, optional, default=None
+            A subset of the dataset for computing gradients. If `None`, uses the full dataset.
 
         ---
         **Returns**
         -------
         dict
-            A dictionary containing gradients of the likelihood/log-likelihood 
-            with respect to each parameter:  
-            - `"N"` : Gradient w.r.t. total number of holes.  
-            - `"r"` : Gradient w.r.t. radius of the ring.  
-            - `"x0"` : Gradients w.r.t. x-offsets (shape: `num_sections`).  
-            - `"y0"` : Gradients w.r.t. y-offsets (shape: `num_sections`).  
-            - `"alpha"` : Gradients w.r.t. angular offsets (shape: `num_sections`).  
+            A dictionary containing gradients of the likelihood/log-likelihood with respect to each parameter:
+            - `"N"` : Gradient w.r.t. total number of holes.
+            - `"r"` : Gradient w.r.t. radius of the ring.
+            - `"x0"` : Gradients w.r.t. x-offsets (array of shape `num_sections`).
+            - `"y0"` : Gradients w.r.t. y-offsets (array of shape `num_sections`).
+            - `"alpha"` : Gradients w.r.t. angular offsets (array of shape `num_sections`).
             - `"sigma"` : Gradient w.r.t. sigma (scalar for isotropic, array for anisotropic).
+
+        ---
+        **Notes**
+        --------
+        - Uses **JAX's automatic differentiation** (`jax.grad`) for gradient computation.
+        - More efficient than finite-difference approximations but may be **less stable** than analytical gradients.
+        - If `neg=True`, returns **negative gradients** for optimization-based approaches (e.g., gradient descent).
         """
 
         if neg and not log:
@@ -688,31 +735,19 @@ class Calender_Analysis:
         """
         Computes the **analytical gradients** of the log-likelihood function.
 
-        This function calculates the partial derivatives of the **log-likelihood** function
-        with respect to each model parameter using the **chain rule**. It supports both:
+        This function explicitly derives the **partial derivatives** of the **log-likelihood** function
+        with respect to each model parameter using the **chain rule**. It is more stable and efficient 
+        than automatic differentiation (e.g., `jax.grad`).
         
-        - **Isotropic Gaussian Error Model**: A single standard deviation `sigma` applies to both x and y errors.
-        - **Anisotropic Gaussian Error Model**: Separate standard deviations `sigma_r` and `sigma_t` 
-          for radial and tangential errors.
-
-        The function is **designed for use in optimization algorithms** such as:
-        - **Stochastic Gradient Descent (SGD)**
-        - **L-BFGS / Adam optimization**
-        - **Hamiltonian Monte Carlo (HMC) and NUTS** (Gradient-based MCMC)
-
-        **Negative Log-Likelihood Option (`neg=True`)**  
-        - If `neg=True`, returns the **negative gradients** (i.e., **gradient ascent**)  
-        - This is useful when minimizing the **negative log-likelihood** during optimization.
-
         ---
         **Log-likelihood expressions:**
         
-        - **Isotropic Model**:
+        - **Isotropic Gaussian Model** (single `sigma` for x and y errors):
           \[
           \log L = -\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left( e_{x,i}^2 + e_{y,i}^2 \right) - n \log(2\pi \sigma)
           \]
         
-        - **Anisotropic Model**:
+        - **Anisotropic Gaussian Model** (separate `sigma_r`, `sigma_t` for radial and tangential errors):
           \[
           \log L = -\frac{1}{2} \sum_{i=1}^{n} \left( \frac{e_{r,i}^2}{\sigma_r^2} + \frac{e_{t,i}^2}{\sigma_t^2} \right) - n \log(2\pi \sigma_r \sigma_t)
           \]
@@ -721,32 +756,28 @@ class Calender_Analysis:
         **Parameters**
         ----------
         N : float
-            The total number of holes in the original (pre-fragmented) circular ring.
+            Total number of holes in the original (pre-fragmented) circular ring.
         r : float
-            The estimated radius of the ring.
-        x0 : jnp.ndarray (shape: `num_sections`)
-            x-offsets for each section.
-        y0 : jnp.ndarray (shape: `num_sections`)
-            y-offsets for each section.
-        alpha : jnp.ndarray (shape: `num_sections`)
-            Angular offsets for each section.
+            Estimated radius of the ring.
+        x0 : jnp.ndarray
+            x-offsets for each section (shape: `num_sections`).
+        y0 : jnp.ndarray
+            y-offsets for each section (shape: `num_sections`).
+        alpha : jnp.ndarray
+            Angular offsets for each section (shape: `num_sections`).
         sigma : float or jnp.ndarray
             - If **isotropic**, a single float `sigma` is used for both x and y errors.
-            - If **anisotropic**, a tuple `(sigma_r, sigma_t)` is used for radial and tangential errors.
-        neg : bool, optional
+            - If **anisotropic**, a JAX array `[sigma_r, sigma_t]` is used for radial and tangential errors.
+        neg : bool, optional, default=False
             - If `True`, returns **negative gradients** for optimization (gradient ascent).
-            - Only valid when computing log-likelihood gradients.
-            - Default is `False`.
-        data : pd.DataFrame, optional
-            A subset of the dataset to compute gradients on. If `None`, the full dataset is used.
-            This is useful for **stochastic gradient descent (SGD)** where mini-batches of data 
-            are processed iteratively.
+        data : pd.DataFrame, optional, default=None
+            A subset of the dataset to compute gradients on. If `None`, uses the full dataset.
 
         ---
         **Returns**
         -------
         dict
-            A dictionary containing gradients of the log-likelihood with respect to:
+            A dictionary containing **analytical gradients** of the log-likelihood:
             - `"N"` : Gradient w.r.t. total number of holes.
             - `"r"` : Gradient w.r.t. radius of the ring.
             - `"x0"` : Gradients w.r.t. x-offsets (shape: `num_sections`).
@@ -757,10 +788,10 @@ class Calender_Analysis:
         ---
         **Notes**
         --------
-        - This function **does not use automatic differentiation**; instead, it explicitly derives 
-          and applies the chain rule to compute analytical derivatives.
-        - If `data` is provided, the gradients are **only computed on that subset**, 
-          making the function **compatible with stochastic optimization methods**.
+        - Uses **explicit derivatives** instead of automatic differentiation.
+        - More stable than `jax.grad()`.
+        - If `neg=True`, returns **negative gradients** (useful for optimization problems).
+
         """
         # Uses the chain rule to determine the analytical gradients of the log likelihood
         # For each item of the graphical model we word out gradients of next dependant variable
@@ -939,55 +970,65 @@ class Calender_Analysis:
     
     def compare_performance_grad(self, N, r, x0, y0, alpha, sigma, neg = False, tolerance=1e-3, num_runs=100, subset_size = 40, return_results=False):
         """
-        Compares execution time, memory usage, and numerical agreement between:
-        - `grad_likelihood` (automatic differentiation via JAX)
-        - `analytic_grad_loglikelihood` (manually derived gradients)
+        Compare performance and numerical accuracy between automatic and analytical gradient computations.
 
-        This function now supports **minibatch processing**, where each gradient computation 
-        is performed on a randomly sampled subset of the dataset to simulate stochastic 
-        gradient descent (SGD). The subset size is controlled by `subset_size`.
+        This function benchmarks the execution time, memory usage, and numerical agreement between:
+        - **Automatic Differentiation (JAX Auto-Diff)**: `grad_likelihood`
+        - **Manually Derived Gradients**: `analytic_grad_loglikelihood`
 
-        Runs each method `num_runs` times, taking random minibatches of data, 
-        to obtain averaged performance metrics for a more robust comparison.
+        Each gradient computation is performed on **random mini-batches** of data (subset size controlled by `subset_size`), 
+        simulating **stochastic gradient descent (SGD)** scenarios. This process is repeated `num_runs` times, and 
+        the **average execution time, peak memory usage, and gradient agreement** are reported.
 
-        Parameters
+        **Key Metrics Measured:**
+        - **Execution time** (seconds)
+        - **Peak memory usage** (kilobytes)
+        - **Numerical accuracy** (maximum absolute deviation between gradients)
+        - **Gradient agreement** (boolean check if both methods agree within `tolerance`)
+
+        ---
+        **Parameters**
         ----------
         N : float
-            Total number of holes in the full calendar ring.
+            Total number of holes in the original calendar ring before fragmentation.
         r : float
             Estimated radius of the ring.
         x0 : jnp.ndarray
-            X-offsets for each section.
+            X-offsets for each section (shape: `num_sections`).
         y0 : jnp.ndarray
-            Y-offsets for each section.
+            Y-offsets for each section (shape: `num_sections`).
         alpha : jnp.ndarray
-            Angular offsets for each section.
+            Angular offsets (radians) for each section (shape: `num_sections`).
         sigma : float or tuple
             - If **isotropic**, a single float `sigma`.
             - If **anisotropic**, a tuple `(sigma_r, sigma_t)`.
-        neg : bool, optional
-            If True calclulates and compares negetive log likelihood
-        tolerance : float, optional
-            The acceptable numerical precision for comparison. Default is `1e-3`.
-        num_runs : int, optional
-            Number of times to run each method to get averaged metrics. Default is `100`.
-        subset_size : int, optional
-            Number of data points to randomly sample for each gradient computation, 
-            simulating minibatch training. Default is `40`.
-        return_results : bool, optional
-            Whether to return the performance metrics as a dictionary. Default is `False`.
+        neg : bool, optional, default=False
+            - If `True`, computes and compares the **negative log-likelihood gradients**.
+            - If `False`, compares the standard log-likelihood gradients.
+        tolerance : float, optional, default=1e-3
+            The numerical precision threshold for gradient agreement. If absolute differences 
+            exceed this, a mismatch is reported.
+        num_runs : int, optional, default=100
+            The number of iterations used to compute averaged performance metrics.
+        subset_size : int, optional, default=40
+            Number of randomly selected data points per iteration, simulating **mini-batch training**.
+            - Must be ≤ total dataset size.
+        return_results : bool, optional, default=False
+            - If `True`, returns a dictionary of performance metrics.
+            - If `False`, logs the results and returns `None`.
 
-        Returns
+        ---
+        **Returns**
         -------
         dict or None
             If `return_results=True`, returns a dictionary containing:
             - `"Auto-Diff"` : Average execution time and memory usage for JAX automatic differentiation.
             - `"Manual-Diff"` : Average execution time and memory usage for manually derived gradients.
-            - `"Agreement"` : Boolean indicating if gradients from both methods agree within tolerance.
-            - `"Max Deviation"` : Maximum absolute difference in gradient values between methods.
+            - `"Agreement"` : `True` if gradients agree within `tolerance`, otherwise `False`.
+            - `"Max Deviation"` : Maximum absolute difference between gradients across all parameters.
             - `"Deviations"` : Dictionary of parameters where numerical mismatches were found.
-        
-            If `return_results=False`, only logs the results and returns `None`.
+
+            If `return_results=False`, logs the results and returns `None`.
         """
 
         # Input validation
@@ -1119,19 +1160,33 @@ class Calender_Analysis:
 
     def sample_from_priors(self, key, num_samples=100):
         """
-        Samples multiple parameter sets from the prior distributions using NumPyro.
+        Generate samples from the prior distributions of model parameters.
 
-        Parameters
+        This function uses **NumPyro's sampling utilities** to draw `num_samples` realisations from 
+        the prior distributions defined during model initialisation. These samples can be used for:
+
+        It supports **both isotropic and anisotropic models**:
+        - **Isotropic model**: A single standard deviation `sigma` is sampled.
+        - **Anisotropic model**: Independent `sigma_r` and `sigma_t` values are sampled.
+
+        ---
+        **Parameters**
         ----------
         key : jax.random.PRNGKey
-            Random key for JAX sampling.
-        num_samples : int, optional
-            Number of samples to generate. Default is `100`.
+            Random key for JAX-based sampling, ensuring reproducibility.
+        num_samples : int, optional, default=100
+            Number of parameter samples to generate.
 
-        Returns
+        ---
+        **Returns**
         -------
         dict
-            Dictionary containing arrays of sampled parameters. Each array has shape `(num_samples, ...)`.
+            A dictionary where:
+            - Each **key** represents a parameter name (`"N"`, `"r"`, `"x0"`, `"y0"`, `"alpha"`, `"sigma"`).
+            - Each **value** is a JAX array of shape `(num_samples, ...)`, where:
+              - Scalar parameters (`"N"`, `"r"`, `"sigma"`) have shape `(num_samples,)`.
+              - Section-dependent parameters (`"x0"`, `"y0"`, `"alpha"`) have shape `(num_samples, num_sections)`.
+              - **For anisotropic models**, `"sigma"` is of shape `(num_samples, 2)`, with `[sigma_r, sigma_t]` per row.
         """
         # Generate subkeys for each parameter from overall key
         keys = jax.random.split(key, len(self.priors) + 1)
@@ -1166,69 +1221,77 @@ class Calender_Analysis:
     # ------------------ Maximum Likelihood Estimation (MLE) ------------------
     def max_likelihood_est(self, sampling_type, num_samples=1000, num_iterations=500, learning_rate=0.01, batch_size=None, key=None, derivative='analytic', analyse_results=False, plot_history = False):
         """
-        Generalized function to compute Maximum Likelihood Estimation (MLE) using different optimization methods.
+        Perform Maximum Likelihood Estimation (MLE) using various optimization algorithms.
 
-        Supported methods:
-        - Stochastic Gradient Descent (SGD)
-        - L-BFGS (Limited-memory BFGS)
-        - Newton's Method
-        - Simulated Annealing
+        This function estimates the **maximum likelihood parameters** of the Bayesian model by optimizing 
+        the log-likelihood function using different numerical methods.
 
-        Recommended Hyperparameters for Each Method:
-        -----------------------------------------------------
+        The user can specify whether to use **automatic differentiation (JAX autodiff)** or 
+        **analytically derived gradients** for optimization. Mini-batch processing is supported for 
+        **SGD, Adam, and L-BFGS** to enhance computational efficiency.
+
+        ---
+        **Optimization Methods:**
         - **SGD (Stochastic Gradient Descent)**
-        - `learning_rate`: **0.01 - 0.1** (Recommended: **0.01**)
-        - `num_iterations`: **500 - 5000** (Recommended: **1000**)
-        - `batch_size`: **20 - 100** (If `None`, full batch is used)
-        - `derivative`: **'analytic'** (Recommended) or `'auto'`
+          - Suitable for large datasets with stochastic updates.
+          - Requires `learning_rate` and `num_iterations`.
+          - Supports mini-batching (`batch_size`).
+
+        - **Adam Optimizer**
+          - Similar to SGD but with adaptive momentum updates.
+          - Requires `learning_rate` and `num_iterations`.
+          - Supports mini-batching (`batch_size`).
 
         - **L-BFGS (Limited-memory BFGS)**
-        - `num_iterations`: **50 - 500** (Recommended: **200**)
-        - `batch_size`: **Optional, use if data is large**
-        - `derivative`: **'analytic'** (Recommended) or `'auto'`
+          - Suitable for smooth convex problems.
+          - Utilizes **quasi-Newton updates** without requiring explicit Hessians.
+          - Batch processing supported.
 
         - **Newton's Method**
-        - `num_iterations`: **10 - 100** (Recommended: **50**)  
-        - `learning_rate`: **0.01 - 0.1** (Recommended: **0.01**)  
-        - `batch_size`: **Optional, use if data is large**  
-        - `derivative`: **'analytic'** (Recommended) or `'auto'`  
-        - (Newton's method is **computationally expensive** and may be unstable for large parameter spaces)
+          - Second-order optimization using the Hessian matrix.
+          - Computationally expensive but highly precise.
+          - **Regularized Hessian Inversion** for numerical stability.
 
         - **Simulated Annealing**
-        - `num_iterations`: **100 - 10,000** (Recommended: **5000**)
-        - `batch_size`: **Not required** (uses full likelihood evaluation)
-        - `temperature`: **Initial `1.0`, cooling rate `0.99`** (default)
-        - `perturbation step size`: **0.1** (default, can be tuned)
-        - (Simulated Annealing is useful for **non-convex likelihood surfaces**)
+          - Useful for non-convex likelihood surfaces.
+          - Explores parameter space using probabilistic updates.
+          - Cooling schedule: `T = 1 / (1 + iteration)`
 
-
-        Parameters
+        ---
+        **Parameters**
         ----------
         sampling_type : str
-            Optimization method: 'SGD', 'L-BFGS', 'Newton', or 'Simulated Annealing'.
+            Optimization method to use. Must be one of:
+            - `'SGD'`
+            - `'Adam'`
+            - `'L-BFGS'`
+            - `'Newton'`
+            - `'Simulated Annealing'`
         num_samples : int, optional
-            Number of parameter initializations to optimize. Default is `1000`.
+            Number of different parameter initializations to optimize. Default is `1000`.
         num_iterations : int, optional
-            Number of iterations for the optimization algorithm. Default is `500`.
+            Number of iterations per optimization. Default is `500`.
         learning_rate : float, optional
-            Learning rate (used for SGD and Newtons method). Default is `0.01`.
+            Learning rate for gradient-based optimizers. Default is `0.01`.
         batch_size : int, optional
-            Size of minibatches for stochastic gradient estimation. Default is `None` (full-batch).
+            Mini-batch size for stochastic optimizers. If `None`, uses full batch. Default is `None`.
         key : jax.random.PRNGKey, optional
-            Random key for reproducibility. Default is a fixed seed.
+            Random key for reproducibility. Default is `None` (fixed seed used).
         derivative : str, optional
-            - `'analytic'`: Uses manually computed gradients.
-            - `'auto'`: Uses automatic differentiation via `jax.grad()`.
-            Default is `'analytic'`.
+            - `'analytic'`: Uses manually computed gradients (default).
+            - `'auto'`: Uses JAX autodiff via `jax.grad()`.
         analyse_results : bool, optional
-            If `True`, computes and visualizes statistics of estimated MLE parameters.
+            If `True`, computes and visualizes summary statistics of MLE results.
+        plot_history : bool, optional
+            If `True`, plots log-likelihood history during optimization.
 
-        Returns
+        ---
+        **Returns**
         -------
         dict
             Dictionary containing:
-            - `"best_params"` : dict, the best parameter set found.
-            - `"max_log_likelihood"` : float, the corresponding maximum log-likelihood value.
+            - `"best_params"` : The parameter set with the highest log-likelihood.
+            - `"max_log_likelihood"` : Maximum log-likelihood value obtained.
         """
 
         # Ensure that the sampling type is valid
@@ -1560,18 +1623,31 @@ class Calender_Analysis:
 
     def _analyse_mle_results(self, mle_results):
         """
-        Analyses Maximum Likelihood Estimation (MLE) results by:
-        - Identifying the best log-likelihood estimate
-        - Computing gradients at the best estimates (top 20%)
-        - Finding the top 20% of log-likelihoods
-        - Plotting histograms of log-likelihoods, gradients, and parameters.
+        Analyse the results of Maximum Likelihood Estimation (MLE).
 
-        Parameters
+        This function provides **diagnostics and visualizations** for the estimated parameters obtained 
+        through MLE. The analysis includes:
+
+        1. **Identifying the best log-likelihood estimate**.
+        2. **Computing gradients at the best estimates** (useful for convergence diagnostics).
+        3. **Extracting the top 20% highest log-likelihoods** for further analysis.
+        4. **Visualizing parameter distributions** with histograms.
+        5. **Plotting log-likelihood and gradient magnitude distributions**.
+
+        ---
+        **Parameters**
         ----------
         mle_results : list of dict
             Each dictionary contains:
-            - `"params"`: A dictionary of parameter estimates.
-            - `"log_likelihood"`: The log-likelihood value.
+            - `"params"` : A dictionary of estimated parameters.
+            - `"log_likelihood"` : The corresponding log-likelihood value.
+
+        ---
+        **Returns**
+        -------
+        None
+            - Displays multiple histograms of parameter distributions.
+            - Logs the best MLE estimates and gradient magnitudes.
         """
 
         if not mle_results:
@@ -1687,11 +1763,6 @@ class Calender_Analysis:
         """
         Defines the model and the likelihood function for Bayesian inference using NumPyro.
 
-        This function models the likelihood of the hole positions assuming either:
-        - **Isotropic Gaussian errors**: A single standard deviation `sigma` applies to both x and y errors.
-        - **Anisotropic Gaussian errors** (default): Separate standard deviations `sigma_r` and `sigma_t` describe 
-        independent radial and tangential accuracies of hole placement.
-
         The function infers the following parameters:
         - `N` : The total number of holes in the full calendar ring.
         - `r` : The estimated radius of the ring before fragmentation.
@@ -1755,42 +1826,55 @@ class Calender_Analysis:
 
     def run_hmc_nuts(self, burnin_period=2000, n_samples=4000, n_chains=1, step_size=1, acceptance_prob=0.8, dense_mass=False, summary = False, random_seed=0, save_path=None, traceplot=None, progress_bar=True):
         """
-        Runs the HMC (Hamiltonian Monte Carlo) chain using the No-U-Turn Sampler (NUTS).
+        Runs the Hamiltonian Monte Carlo (HMC) inference using the No-U-Turn Sampler (NUTS).
 
-        This function initializes and executes a Bayesian inference process using NUTS, 
-        a variant of HMC that automatically determines the optimal number of leapfrog steps. 
-        It tracks computational efficiency, provides optional summary statistics, and allows 
-        for sample storage.
+        This function performs **Bayesian inference** using the NUTS algorithm, which efficiently 
+        samples from the posterior distribution of the parameters while tuning itself for 
+        computational efficiency.
 
-        Parameters
+        The function supports:
+        - **Tuning hyperparameters** (step size, acceptance probability, mass matrix).
+        - **Multiple independent chains** for parallelised inference.
+        - **Saving posterior samples** to a NetCDF file for later analysis.
+        - **Trace plots** to diagnose convergence and sampling quality.
+
+        ---
+        **Parameters**
         ----------
         burnin_period : int, optional, default=2000
-            The number of warm-up (burn-in) samples used to adapt step size and mass matrix.
+            Number of warm-up (burn-in) samples used to adapt the step size and mass matrix.
         n_samples : int, optional, default=4000
-            The number of posterior samples to collect after burn-in.
+            Number of posterior samples to collect after the burn-in period.
         n_chains : int, optional, default=1
-            The number of independent MCMC chains to run in parallel.
-        step_size : float or None, optional, default=1
-            The step size for NUTS. If `None`, the sampler will adaptively tune it.
+            Number of independent MCMC chains to run in parallel.
+        step_size : float, optional, default=1
+            Initial step size for the NUTS sampler. If `None`, the sampler adapts the step size automatically.
         acceptance_prob : float, optional, default=0.8
-            The target acceptance probability for the NUTS algorithm. 
-            Typical values range from 0.6 to 0.95.
+            Target acceptance probability for the sampler (recommended range: `0.6 - 0.95`).
         dense_mass : bool, optional, default=False
-            Whether to use a dense mass matrix (`True`) or a diagonal mass matrix (`False`).
+            Whether to use a **dense** mass matrix (`True`) or a **diagonal** mass matrix (`False`).
         summary : bool, optional, default=False
-            If `True`, prints summary statistics for the MCMC run.
+            If `True`, prints summary statistics of the posterior samples.
         random_seed : int, optional, default=0
             Random seed for reproducibility.
         save_path : str or None, optional, default=None
-            If provided, saves the MCMC samples in NetCDF format.
-        show_traceplot : bool, optional, default=False
-            If `True`, generates trace plots of MCMC samples.
-        Returns
+            If provided, saves the MCMC posterior samples as a NetCDF file.
+        traceplot : list or None, optional, default=None
+            List of parameter names to include in **trace plots**. If `None`, no plots are generated.
+        progress_bar : bool, optional, default=True
+            If `True`, displays a progress bar during sampling.
+
+        ---
+        **Returns**
         -------
-        mcmc : numpyro.infer.mcmc.MCMC
-            The MCMC object containing all chain states, including posterior samples.
+        mcmc : numpyro.infer.MCMC
+            The MCMC object containing:
+            - Posterior samples.
+            - Log-likelihood estimates.
+            - Diagnostic statistics.
         samples_time : float
-            The estimated runtime for collecting posterior samples (excluding burn-in time).
+            Estimated runtime (in seconds) for collecting posterior samples (excluding burn-in).
+
         """
 
         # Initialize the RNG key
@@ -1853,121 +1937,153 @@ class Calender_Analysis:
  
 
     def run_hmc_optimisation(self, step_size_range, acceptance_prob_range, dense_mass_options, burnin_period=2000, n_samples=3000, n_chains=4, random_seed=0, save_path=None, no_table_results=1):
-            """
-            Runs a grid search over HMC hyperparameters to find the optimal configuration.
+        """
+        Performs a grid search over HMC hyperparameters to identify the optimal configuration.
 
-            This function systematically varies the step size, target acceptance probability, and 
-            mass matrix structure to evaluate their impact on sampler performance.
+        This function systematically evaluates different combinations of:
+        - Step size (`step_size_range`)
+        - Target acceptance probability (`acceptance_prob_range`)
+        - Mass matrix structure (`dense_mass_options`)
 
-            A conservative burn-in period (`burnin_period`) is used to ensure convergence, followed by 
-            sampling (`n_samples`) from the posterior. The function tracks key performance metrics 
-            including the number of effective samples, Gelman-Rubin diagnostic (`R-hat`), sampling time, 
-            and computational efficiency.
+        Each configuration is assessed using multiple **Markov Chain Monte Carlo (MCMC)** runs 
+        with the No-U-Turn Sampler (NUTS). Calculates performance metrics such as the **number of effective samples**, 
+        **autocorrelation length**, **Gelman-Rubin diagnostic (R-hat)**, and **computational efficiency** 
+        are recorded.
 
-            Parameters
-            ----------
-            step_size_range : list
-                A list of step sizes to test. 
-            acceptance_prob_range : list
-                A list of target acceptance probabilities to test (e.g., `[0.7, 0.8, 0.9]`).
-            dense_mass_options : list
-                A list of mass matrix choices (`True` for dense mass matrix, `False` for diagonal).
-            burnin_period : int, optional, default=2000
-                The number of warm-up (burn-in) samples used for step size and mass matrix adaptation.
-            n_samples : int, optional, default=4000
-                The number of posterior samples to collect after burn-in.
-            n_chains : int, optional, default=4
-                The number of independent MCMC chains to run in parallel.
-                Must be at least 2 to compute the Gelman-Rubin (`R-hat`) statistic.
-            random_seed : int, optional, default=0
-                Random seed for reproducibility.
-            save_results : bool, optional, default=False
-                If `True`, saves the results as a CSV file (`hmc_optimization_results.csv`).
+        The best hyperparameter set is determined based on the **Time Per Effective Sample (TPES)**, 
+        which measures sampling efficiency.
 
-            Returns
-            -------
-            results_df : pandas.DataFrame
-                A DataFrame containing the performance metrics for each hyperparameter combination.
-            best_params : dict
-                The best hyperparameter combination based on the lowest Time Per Effective Sample (TPES).
-            """
+        ---
+        **Parameters**
+        ----------
+        step_size_range : list of float
+            A list of step sizes to test.
+        acceptance_prob_range : list of float
+            A list of target acceptance probabilities (e.g., `[0.7, 0.8, 0.9]`).
+        dense_mass_options : list of bool
+            A list of mass matrix choices:
+            - `True` → Use a **dense mass matrix** (computationally expensive, better for correlated parameters).
+            - `False` → Use a **diagonal mass matrix** (cheaper, but less effective for strongly correlated parameters).
+        burnin_period : int, optional, default=2000
+            The number of warm-up (burn-in) samples used to adapt step size and mass matrix.
+        n_samples : int, optional, default=3000
+            The number of posterior samples to collect after burn-in.
+        n_chains : int, optional, default=4
+            The number of independent MCMC chains to run in parallel.
+            **Note:** Must be at least `2` to compute the **Gelman-Rubin (R-hat) statistic**.
+        random_seed : int, optional, default=0
+            Random seed for reproducibility.
+        save_path : str or None, optional, default=None
+            If provided, saves the hyperparameter search results as a CSV file.
+        no_table_results : int, optional, default=1
+            The number of top configurations to display in the final summary table.
 
-            if n_chains < 2:
-                raise ValueError("Number of chains must be at least 2 for Gelman-Rubin diagnostics.")
+        ---
+        **Returns**
+        -------
+        results_df : pandas.DataFrame
+            A DataFrame containing performance metrics for each hyperparameter combination:
+            - `"Step Size"` : Step size used.
+            - `"Acceptance Probability"` : Target acceptance probability.
+            - `"Dense Mass Matrix"` : Boolean indicating mass matrix type.
+            - `"Autocorrelation Length"` : Estimated autocorrelation length.
+            - `"Number Effective Samples"` : Minimum effective sample size across parameters.
+            - `"GR Statistic"` : Gelman-Rubin diagnostic (values close to 1 indicate convergence).
+            - `"Time per Iteration"` : Average computation time per sample.
+            - `"Time per Effective Sample (TPES)"` : Efficiency metric (lower is better).
+        
+        best_params : dict
+            The best hyperparameter combination based on the lowest **Time Per Effective Sample (TPES)**.
 
-            # Create a grid of all hyperparameter combinations
-            param_grid = list(itertools.product(step_size_range, acceptance_prob_range, dense_mass_options))
-            # Total number of search experiments
-            total_iterations = len(param_grid)
-            # Initialise storage of results
-            results = []
+        ---
+        **Notes**
+        --------
+        - **Hyperparameter Selection Guidance**:
+            - **Step size**: Too small → slow mixing, too large → high rejection rate.
+            - **Acceptance probability**: Recommended range is `0.65 - 0.9`.
+            - **Dense mass matrix**: More expensive but better for correlated parameters.
 
-            # Iterate over all the hyperparameter combinations
-            for i, (step_size, accept_prob, dense_mass) in enumerate(param_grid, start=1):
-                logging.info(f"Running MCMC {i}/{total_iterations} | step_size={step_size}, accept_prob={accept_prob}, dense_mass={dense_mass}")
-                
-                # Run MCMC with the current hyperparameters from search
-                mcmc, sample_time= self.run_hmc_nuts(burnin_period=burnin_period, n_samples=n_samples, n_chains=n_chains,step_size=step_size, acceptance_prob=accept_prob, dense_mass=dense_mass,
-                random_seed=random_seed, save_path=None, traceplot=None, progress_bar=False)
+        - **Performance Metrics**:
+            - **Time per Effective Sample (TPES)**: Lower values indicate a more efficient sampler.
+            - **R-hat Statistic**: Should be close to `1.0` (values > `1.1` suggest non-convergence).
+            - **Autocorrelation Length**: Higher values indicate slower mixing.
+        """
 
-                # Convert results to ArviZ format
-                posterior_data = az.from_numpyro(mcmc)
+        if n_chains < 2:
+            raise ValueError("Number of chains must be at least 2 for Gelman-Rubin diagnostics.")
 
-                # Determine preformance metrics 
-                # Number off effective samples from total (mean - across all chains, min - across all parameters)
-                eff_sample_size = az.ess(posterior_data).to_dataframe().min().min()
-                # Calculate Auto-correlation length
-                autocorr_length = n_samples/eff_sample_size
-                # GR statisitc (mean - across all chains, min - across all parameters)
-                gr_stat = az.rhat(posterior_data).to_dataframe().mean().mean()
+        # Create a grid of all hyperparameter combinations
+        param_grid = list(itertools.product(step_size_range, acceptance_prob_range, dense_mass_options))
+        # Total number of search experiments
+        total_iterations = len(param_grid)
+        # Initialise storage of results
+        results = []
 
-                # Compute Time Per Effective Sample (TPES)
-                tpes = sample_time / eff_sample_size if eff_sample_size > 0 else float('inf')
-                # Compute Time per Iteration (TPI)
-                tpi = sample_time / n_samples
+        # Iterate over all the hyperparameter combinations
+        for i, (step_size, accept_prob, dense_mass) in enumerate(param_grid, start=1):
+            logging.info(f"Running MCMC {i}/{total_iterations} | step_size={step_size}, accept_prob={accept_prob}, dense_mass={dense_mass}")
+            
+            # Run MCMC with the current hyperparameters from search
+            mcmc, sample_time= self.run_hmc_nuts(burnin_period=burnin_period, n_samples=n_samples, n_chains=n_chains,step_size=step_size, acceptance_prob=accept_prob, dense_mass=dense_mass,
+            random_seed=random_seed, save_path=None, traceplot=None, progress_bar=False)
+
+            # Convert results to ArviZ format
+            posterior_data = az.from_numpyro(mcmc)
+
+            # Determine preformance metrics 
+            # Number off effective samples from total (mean - across all chains, min - across all parameters)
+            eff_sample_size = az.ess(posterior_data).to_dataframe().min().min()
+            # Calculate Auto-correlation length
+            autocorr_length = n_samples/eff_sample_size
+            # GR statisitc (mean - across all chains, min - across all parameters)
+            gr_stat = az.rhat(posterior_data).to_dataframe().mean().mean()
+
+            # Compute Time Per Effective Sample (TPES)
+            tpes = sample_time / eff_sample_size if eff_sample_size > 0 else float('inf')
+            # Compute Time per Iteration (TPI)
+            tpi = sample_time / n_samples
 
 
-                # Store results
-                results.append({
-                    "Step Size": step_size,
-                    "Acceptance Probability": accept_prob,
-                    "Dense Mass Matrix": dense_mass,
-                    "Autocorrolation Length": autocorr_length,
-                    "Number Effective Samples": eff_sample_size,
-                    "GR Statistic": gr_stat,
-                    "Time per iteration": tpi,
-                    "Time per Effective Sample": tpes
-                    })
-                
-            # Convert results to DataFrame
-            results_df = pd.DataFrame(results)
+            # Store results
+            results.append({
+                "Step Size": step_size,
+                "Acceptance Probability": accept_prob,
+                "Dense Mass Matrix": dense_mass,
+                "Autocorrolation Length": autocorr_length,
+                "Number Effective Samples": eff_sample_size,
+                "GR Statistic": gr_stat,
+                "Time per iteration": tpi,
+                "Time per Effective Sample": tpes
+                })
+            
+        # Convert results to DataFrame
+        results_df = pd.DataFrame(results)
 
-            # Find best combination (lowest TPES)
-            best_params = results_df.loc[results_df["Time per Effective Sample"].idxmin()].to_dict()
+        # Find best combination (lowest TPES)
+        best_params = results_df.loc[results_df["Time per Effective Sample"].idxmin()].to_dict()
 
-            # Save results if requested
-            if save_path is not None:
-                results_df.to_csv(save_path, index=False)
-                logging.info(f"Results saved to {save_path}")
+        # Save results if requested
+        if save_path is not None:
+            results_df.to_csv(save_path, index=False)
+            logging.info(f"Results saved to {save_path}")
 
-            logging.info(
-                "\n" + "=" * 40 +
-                "\n Best Hyperparameter Configuration:\n" +
-                "\n".join([f"   {key}: {value}" for key, value in best_params.items()]) +
-                "\n" + "=" * 40 
-            )
+        logging.info(
+            "\n" + "=" * 40 +
+            "\n Best Hyperparameter Configuration:\n" +
+            "\n".join([f"   {key}: {value}" for key, value in best_params.items()]) +
+            "\n" + "=" * 40 
+        )
 
-            # Log Top Configurations with Smallest TPES
-            if no_table_results > 0:
-                top_configs = results_df.nsmallest(no_table_results, "Time per Effective Sample")
-                logging.info("\n Top 3 Hyperparameter Configurations by Time per Effective Sample:\n" + top_configs.to_string(index=False))
+        # Log Top Configurations with Smallest TPES
+        if no_table_results > 0:
+            top_configs = results_df.nsmallest(no_table_results, "Time per Effective Sample")
+            logging.info("\n Top 3 Hyperparameter Configurations by Time per Effective Sample:\n" + top_configs.to_string(index=False))
 
-            return results_df, best_params
+        return results_df, best_params
 
     
 
     def run_hmc_optimised(self, best_params, burnin_period=2000, n_samples=4000, n_chains =  1, random_seed=0, save_path = None, traceplot=None):
-        
         """
         Runs the HMC (Hamiltonian Monte Carlo) chain using the No-U-Turn Sampler (NUTS) with optimised hyperparameters.
 
@@ -2010,6 +2126,7 @@ class Calender_Analysis:
         dense_mass = best_params["Dense Mass Matrix"]
         autocorr_length = max(1, math.ceil(best_params["Autocorrolation Length"]))
 
+        # Calculate the total samples to run per chain based on the autocorrelation length
         total_samples_per_chain = int((n_samples * autocorr_length + 1)/n_chains)
 
         logging.info(f"Running MCMC with Optimised Hyperparameters: step_size={step_size}, accept_prob={accept_prob}, dense_mass={dense_mass}" 
@@ -2025,20 +2142,24 @@ class Calender_Analysis:
         # Extract samples
         posterior_data = az.from_numpyro(mcmc)
 
-        # Determine preformance metrics before thinning - GR Statisitc 
+        # Determine preformance metrics before thinning as a final check - GR Statisitc, No of Effective Samples, Auto-correlation Length
+        # The No. Effective samples is taken as the minimum across all parameters to be conservative - ie maximium autocorrolation length
         gr_stat = az.rhat(posterior_data).to_dataframe().mean().max()
         true_eff_samples = az.ess(posterior_data).to_dataframe().mean().min() * n_chains
         true_auto_corr = math.ceil(total_samples_per_chain / true_eff_samples * n_chains)
 
         logging.info(f" Over {n_chains} chains, {total_samples_per_chain*n_chains} were run, \nAchieved Gelman-Rubin Statistic: {gr_stat:.4f}, \nAchieved Effective Samples: {true_eff_samples:.0f}, \nTrue Auto-correlation Length: {true_auto_corr:.0f}")
 
-        # Preform thinning 
+        # Thin the samples to ensure they are not correlated - every true_auto_corr sample is kept
         thinned_posterior = posterior_data.copy()
         thinned_posterior.posterior = thinned_posterior.posterior.sel(draw=slice(None, None, true_auto_corr))
 
         remaining_samples = thinned_posterior.posterior.sizes["draw"] * n_chains
         logging.info(f"Total samples remaining after thinning: {remaining_samples}")
-
+        
+        # Save both the full and thinned posterior samples
+        # Full can be used for plotting 
+        # Thin can be used for statistical analysis
         if save_path is not None:
             thined_save_path = save_path.replace(".nc", "_thinned.nc")
             posterior_data.to_netcdf(save_path)
@@ -2050,42 +2171,69 @@ class Calender_Analysis:
 
     def thinned_hcm_analysis(self, posterior_data, summary_table=True, corner_plot=["r", "N", "sigma_r", "sigma_t"]): 
         """
-        Perform analysis on posterior samples, including summary statistics and corner plots.
+        Performs analysis on posterior samples, including summary statistics and corner plots.
 
-        Parameters
+        **Features:**
+        - **Summary Table:** Computes detailed summary statistics for posterior parameters, including:
+          - Median and standard deviation.
+          - 68%, 90%, 95%, and 99% credible intervals.
+        - **Corner Plot:** Visualizes parameter correlations using a triangle (corner) plot.
+
+        ---
+        **Parameters**
         ----------
         posterior_data : arviz.InferenceData or str
-            The posterior samples as an InferenceData object or a path to an ArviZ-compatible NetCDF file.
+            The posterior samples as an **ArviZ InferenceData** object or a path to an **ArviZ-compatible NetCDF file**.
         summary_table : bool, optional, default=True
-            Whether to compute and display the summary statistics.
-        corner_plot : list of str, optional, default=["N", "r", "sigma_r", "sigma_t"]
-            List of parameter names to include in the corner plot.
+            Whether to compute and display summary statistics.
+        corner_plot : list of str or None, optional, default=["r", "N", "sigma_r", "sigma_t"]
+            List of parameters to include in the corner plot.
+            - Set to `None` to **disable plotting**.
+
+        ---
+        **Returns**
+        -------
+        None
+            Displays the summary table and plots the requested corner plot.
+
+        ---
+        **Notes**
+        --------
+        - If a **NetCDF file path** is provided, the function attempts to load both:
+          - The **full posterior** (`posterior_samples.nc`).
+          - The **thinned posterior** (`posterior_samples_thinned.nc`) for efficiency.
         """
 
         # Check if posterior_data is an InferenceData object, otherwise attempt to load it
         if not isinstance(posterior_data, az.InferenceData):
+            # If a string is provided, attempt to load the NetCDF file assuming it is a path
             if isinstance(posterior_data, str) and os.path.isfile(posterior_data):
                 try:
+                    # Load both the full and thinned posterior samples
                     posterior_data_path = posterior_data
                     thinned_posterior_path = posterior_data_path.replace(".nc", "_thinned.nc")
                     posterior_data = az.from_netcdf(posterior_data)
                     thinned_posterior_data = az.from_netcdf(thinned_posterior_path)
-                    logging.info("Loaded posterior data from NetCDF file.")
+                    logging.info(f"Loaded full and thinned posterior data {posterior_data_path}.")
                 except Exception as e:
                     raise ValueError(f"Error loading NetCDF file: {e}")
             else:
                 raise TypeError("posterior_data must be an ArviZ InferenceData object or a valid NetCDF file path.")
         else:
             thinned_posterior_data = None
-            
+        
+        # ------------------ Summary Statistics ------------------
         if summary_table:
-
+            
+            # Define a series of functions to compute desired summary statistics
+            # Allow these to be fed into the az.summary function and automatically computed
             def median_sd(x):
                 """Compute the standard deviation around the median."""
                 median = np.percentile(x, 50)
                 return np.sqrt(np.mean((x - median) ** 2))
 
-            # Dictionary of statistics functions
+            # Dictionary of statistics functions passed into az.summary
+            # Median, and 68%, 90%, 95%, 97.7, 99.5% credible intervals
             func_dict = {
                 "std": np.std,
                 "median_std": median_sd,
@@ -2100,18 +2248,19 @@ class Calender_Analysis:
                 "99%_upper": lambda x: np.percentile(x, 99.5),
             }
 
-            # Compute summary statistics
+            # Compute summary statistics using the defined functions
+            # If a thinned dataset is available, use that for the summary otherwise use the full dataset
             if thinned_posterior_data is not None:
                 summary_df = az.summary(thinned_posterior_data, stat_funcs=func_dict, extend=True)
             else:
                 summary_df = az.summary(posterior_data, stat_funcs=func_dict, extend=True)
 
-            # Compute deviations from the median
+            # Convert percentile thresholds to deviations from the median
             for ci in ["68%", "90%", "95%", "99%"]:
                 summary_df[f"{ci}_upper"] = summary_df[f"{ci}_upper"] - summary_df["median"]
                 summary_df[f"{ci}_lower"] = summary_df["median"] - summary_df[f"{ci}_lower"]
 
-            # Format confidence intervals in ± format (fixed issue)
+            # Format confidence intervals + upper, - lower for each percentile
             for ci in ["68%", "90%", "95%", "99%"]:
                 summary_df[ci] = summary_df.apply(
                     lambda row: f"+{row[f'{ci}_upper']:.4f} − {abs(row[f'{ci}_lower']):.4f}",
@@ -2120,18 +2269,19 @@ class Calender_Analysis:
 
             # Keep only formatted columns
             summary_df = summary_df[["median", "68%", "90%", "95%", "99%"]]
-
-            # Rename index to match parameter names
             summary_df.index.name = "parameter"
 
+            # Warn about section indexes not being comparable because they were reindexed on import
             logging.info('NOTE: When comparing the results to the paper, the section indexes are not comparable, but there order is')
             display(summary_df)
 
+        # ------------------ Corner Plot ------------------
         if corner_plot is not None:
-            # Flatten chains into a single sample list
-            flattened_samples = thinned_posterior_data.posterior.stack(sample=("chain", "draw"))
+            # Flatten chains - each parameter is a single row
+            # For plotting use the full (unthinned) dataset
+            flattened_samples = posterior_data.posterior.stack(sample=("chain", "draw"))
 
-            # Define custom LaTeX labels for parameters
+            # Define custom LaTeX labels for parameters for need plot formatting
             param_labels = {
                 "N": "$N$",
                 "r": "$r$",
@@ -2139,7 +2289,7 @@ class Calender_Analysis:
                 "sigma_t": r"$\sigma_t$",
             }
 
-            # Extract selected parameters into a NumPy array
+            # Extract parameters in requested list into a NumPy array
             try:
                 samples_array = np.column_stack(
                     [flattened_samples[var].values.flatten() for var in corner_plot if var in flattened_samples]
@@ -2154,55 +2304,162 @@ class Calender_Analysis:
             # Create corner plot with formatted labels and larger text
             figure = corner.corner(
                 samples_array, 
-                labels=[param_labels.get(var, var) for var in corner_plot],  # Apply formatted labels
+                labels=[param_labels.get(var, var) for var in corner_plot], 
                 show_titles=True,
                 title_fmt=".2f",
-                title_kwargs={"fontsize": 16},  # Larger title text
-                label_kwargs={"fontsize": 20},  # Larger axis labels
+                title_kwargs={"fontsize": 16}, 
+                label_kwargs={"fontsize": 20},  
                 plot_datapoints=True,
                 plot_contours=True,
                 plot_density=True,
             )
-
-            # Optimize layout and increase tick label size
             for ax in figure.get_axes():
                 ax.xaxis.set_tick_params(labelsize=14)
                 ax.yaxis.set_tick_params(labelsize=14)
-
             figure.subplots_adjust(left=0.1, right=0.95, top=0.95, bottom=0.1, wspace=0.1, hspace=0.1)
-            
             plt.show()
 
         return None
     
     def plot_credible_intervals(self, posterior_data, param="N", percentiles_range=(50, 100)):
         """
-        Plot the credible intervals for a parameter across different confidence levels.
+        Plots credible intervals for a parameter across different confidence levels.
 
-        Parameters
+        This function extracts posterior samples for a specified parameter and visualizes its 
+        distribution across various credible interval levels.
+
+        ---
+        **Parameters**
         ----------
         posterior_data : arviz.InferenceData or str
             The MCMC posterior samples (or path to a NetCDF file).
-        param : str
-            The parameter name to plot credible intervals for.
-        percentiles_range : tuple
-            The range of percentiles to compute the credible intervals (default: 50% to 100%).
+        param : str, optional, default="N"
+            The parameter name to compute credible intervals for.
+        percentiles_range : tuple, optional, default=(50, 100)
+            The percentile range (e.g., `(50, 100)`) over which to compute credible intervals.
+
+        ---
+        **Returns**
+        -------
+        None
+            Displays a plot of credible intervals.
+
+        ---
+        **Notes**
+        --------
+        - Uses **thinned posterior samples** if available for better efficiency.
+        - The plot **shades the full credible interval region**, with upper and lower bounds shown.
         """
 
         # Check if posterior_data is an InferenceData object, otherwise attempt to load it
+        if not isinstance(posterior_data, az.InferenceData):
+            # If a string is provided, attempt to load the NetCDF file assuming it is a path
+            if isinstance(posterior_data, str) and os.path.isfile(posterior_data):
+                try:
+                    # Load both the full and thinned posterior samples
+                    posterior_data_path = posterior_data
+                    thinned_posterior_path = posterior_data_path.replace(".nc", "_thinned.nc")
+                    posterior_data = az.from_netcdf(posterior_data)
+                    thinned_posterior_data = az.from_netcdf(thinned_posterior_path)
+                    logging.info(f"Loaded full and thinned posterior data {posterior_data_path}.")
+                except Exception as e:
+                    raise ValueError(f"Error loading NetCDF file: {e}")
+            else:
+                raise TypeError("posterior_data must be an ArviZ InferenceData object or a valid NetCDF file path.")
+        else:
+            thinned_posterior_data = None
+
+        
+        # Generate array of desired percentile calculations (e.g., 50% to 100%)
+        percentiles = np.linspace(percentiles_range[0], percentiles_range[1], percentiles_range[1] - percentiles_range[0])
+
+        # Extract parameter for chosen param samples & flatten across chains - use thinned data if available
+        if thinned_posterior_data is not None and param in thinned_posterior_data.posterior:
+            param_samples = thinned_posterior_data.posterior[param].stack(sample=("chain", "draw")).values
+        else:
+            param_samples = posterior_data.posterior[param].stack(sample=("chain", "draw")).values
+
+        # Compute credible intervals - both the lower and upper bounds
+        lower_bounds = np.percentile(param_samples, [(100 - p) / 2 for p in percentiles])
+        upper_bounds = np.percentile(param_samples, [100 - (100 - p) / 2 for p in percentiles])
+
+        # Plot credible intervals
+        fig, ax = plt.subplots(figsize=(8, 5))
+
+        # Plot the full credible interval and shade the area
+        ax.plot(percentiles, upper_bounds, color="red", label="Full")
+        ax.plot(percentiles, lower_bounds, color="red")
+        ax.fill_between(percentiles, lower_bounds, upper_bounds, color="red", alpha=0.3)
+        ax.set_xlabel("Credible Interval Level (%)", fontsize=14)
+        ax.set_ylabel(f"{param} Estimate", fontsize=14)
+        ax.legend(fontsize=12)
+        ax.grid(True, linestyle="--", alpha=0.6)
+        plt.show()
+
+        return None
+    
+
+
+
+    ##### THIS STILL NEEDS FINE TUNING GRAPH WISE
+    
+    def plot_posterior_holes(self, posterior_data, hole_no=1, section_no=5):
+        """
+        Plots the posterior distribution of hole positions based on MCMC samples.
+
+        This function visualizes the **posterior distribution** of a selected hole's position
+        using samples from the **Markov Chain Monte Carlo (MCMC) posterior distribution**.
+        It overlays:
+        - **MCMC posterior samples** (scatter plot).
+        - **Mean posterior estimate** with ±1 sigma error bars.
+        - **Observed hole position** from the dataset.
+
+        ---
+        **Parameters**
+        ----------
+        posterior_data : arviz.InferenceData or str
+            The MCMC posterior samples as an **ArviZ InferenceData** object or a **path to a NetCDF file**.
+        hole_no : int, optional, default=1
+            The hole number to analyze.
+        section_no : int, optional, default=5
+            The section number to analyze.
+
+        ---
+        **Returns**
+        -------
+        None
+            Displays a plot of credible intervals.
+
+        ---
+        **Raises**
+        ---------
+        ValueError
+            If the specified `hole_no` and `section_no` do not exist in the observed dataset.
+        TypeError
+            If `posterior_data` is neither an **ArviZ InferenceData object** nor a **valid NetCDF file path**.
+        ValueError
+            If there is an issue loading the NetCDF file.
+        """
+
+        # Ensure that the hole number and section number are in the observed data allowing for comparison
+        if not jnp.any((self.hole_nos_obs == hole_no) & (self.section_ids_obs == section_no)):
+            raise ValueError("Error: The hole number and section number combination is not in the observed data - so there will be no comparison to make.")
+
+        # Load posterior data if not already an InferenceData object
         if not isinstance(posterior_data, az.InferenceData):
             if isinstance(posterior_data, str) and os.path.isfile(posterior_data):
                 try:
                     posterior_data_path = posterior_data
                     thinned_posterior_path = posterior_data_path.replace(".nc", "_thinned.nc")
                     posterior_data = az.from_netcdf(posterior_data)
-                    
-                    # Load thinned data if it exists
+                    # Load thinned data if available
                     if os.path.isfile(thinned_posterior_path):
                         thinned_posterior_data = az.from_netcdf(thinned_posterior_path)
+                        mcmc_params = thinned_posterior_data.posterior
                         logging.info("Loaded thinned posterior data from NetCDF file.")
                     else:
                         thinned_posterior_data = None
+                        mcmc_params = posterior_data.posterior
                     
                     logging.info("Loaded posterior data from NetCDF file.")
                 except Exception as e:
@@ -2210,77 +2467,68 @@ class Calender_Analysis:
             else:
                 raise TypeError("posterior_data must be an ArviZ InferenceData object or a valid NetCDF file path.")
         else:
-            thinned_posterior_data = None  # Set to None if data is already an InferenceData object
+            thinned_posterior_data = None 
+            mcmc_params = posterior_data.posterior
 
-        # Generate array of percentiles
-        percentiles = np.linspace(percentiles_range[0], percentiles_range[1], percentiles_range[1] - percentiles_range[0])
+        # Extract all parameter names from the posterior samples
+        param_names = list(mcmc_params.keys())
 
-        # Extract parameter samples & flatten across chains
-        if thinned_posterior_data is not None and param in thinned_posterior_data.posterior:
-            param_samples = thinned_posterior_data.posterior[param].stack(sample=("chain", "draw")).values
-        else:
-            param_samples = posterior_data.posterior[param].stack(sample=("chain", "draw")).values
+        # Store samples for each parameter as a dictionary - each as an array
+        all_param_samples = {param: mcmc_params[param].stack(sample=("chain", "draw")).values for param in param_names}
 
-        # Compute credible intervals
-        lower_bounds = np.percentile(param_samples, [(100 - p) / 2 for p in percentiles])
-        upper_bounds = np.percentile(param_samples, [100 - (100 - p) / 2 for p in percentiles])
+        # Convert samples parameter value to JAX arrays
+        N_samples = jnp.array(all_param_samples['N'])
+        r_samples = jnp.array(all_param_samples['r'])
+        x0_samples = jnp.array(all_param_samples['x0']).T
+        y0_samples = jnp.array(all_param_samples['y0']).T
+        alpha_samples = jnp.array(all_param_samples['alpha']).T
 
-        # Convert percentiles to x-axis
-        x_vals = percentiles
+        # ------------------ Compute Hole Positions ------------------
 
-        # Plot credible intervals
-        fig, ax = plt.subplots(figsize=(8, 5))
+        # Compute hole positions using using `hole_positions` function
+        # Loop through all samples and compute hole positions
+        mcmc_hole_locations = []
+        for i in range(len(N_samples)):
+            hole_position = self.hole_positions(
+                float(N_samples[i]), float(r_samples[i]), 
+                x0_samples[i], y0_samples[i], alpha_samples[i], 
+                section_ids=section_no, hole_nos=hole_no
+            )
+            mcmc_hole_locations.append(hole_position)
 
-        # Plot the full credible interval (red)
-        ax.plot(x_vals, upper_bounds, color="red", label="Full")
-        ax.plot(x_vals, lower_bounds, color="red")
-        ax.fill_between(x_vals, lower_bounds, upper_bounds, color="red", alpha=0.3)
+        # Convert list to JAX array & separate X and Y positions
+        mcmc_hole_locations = jnp.array(mcmc_hole_locations).T
+        x_post_samples, y_post_samples = mcmc_hole_locations[0], mcmc_hole_locations[1]
 
+        # Compute mean & standard deviation of posterior samples
+        x_mean, y_mean = jnp.mean(x_post_samples), jnp.mean(y_post_samples)
+        x_std, y_std = jnp.std(x_post_samples), jnp.std(y_post_samples)
 
-        # Labels and formatting
-        ax.set_xlabel("Credible Interval Level (%)", fontsize=14)
-        ax.set_ylabel(f"{param} Estimate", fontsize=14)
+        # Get observed data point from original dataset
+        hole_obs_index = jnp.where((self.hole_nos_obs == hole_no) & (self.section_ids_obs == section_no))
+        x_obs = self.x_obs[hole_obs_index]
+        y_obs = self.y_obs[hole_obs_index]
+
+        # ------------------ Plot Posterior Hole Positions ------------------
+        fig, ax = plt.subplots(figsize=(7, 7))
+
+        # Scatter plot of posterior samples (tiny dots)
+        ax.scatter(x_post_samples, y_post_samples, s=5, color="blue", alpha=0.3, label="MCMC Samples")
+
+        # Mean posterior estimate (crosshairs)
+        ax.errorbar(x_mean, y_mean, xerr=x_std, yerr=y_std, fmt="rx", markersize=10, label="Mean Posterior (±1σ)")
+
+        # Observed hole position (red circle)
+        ax.scatter(x_obs, y_obs, color="red", s=100, edgecolor="black", label="Observed Hole")
+
+        ax.set_xlabel("X Position", fontsize=14)
+        ax.set_ylabel("Y Position", fontsize=14)
+        ax.set_title(f"Posterior Hole Positions\n(Hole {hole_no}, Section {section_no})", fontsize=16)
         ax.legend(fontsize=12)
-        ax.grid(True, linestyle="--", alpha=0.6)
-
+        ax.grid(True, linestyle="--", alpha=0.5)
         plt.show()
 
-        return None
-    
-    def plot_posterior_holes(self, posterior_data, num_samples=100, random_seed=0):
-        """
-        Plot the posterior distribution of hole positions based on MCMC samples.
+        return mcmc_hole_locations
 
-        This function generates a random selection of `num_samples` from the MCMC posterior samples
-        and plots the corresponding hole positions on the calendar ring.
-
-        Parameters
-        ----------
-        posterior_data : arviz.InferenceData or str
-            The MCMC posterior samples (or path to a NetCDF file).
-        num_samples : int, optional, default=100
-            The number of posterior samples to plot.
-        random_seed : int, optional, default=0
-            Random seed for reproducibility.
-        """
-
-        # Check if posterior_data is an InferenceData object, otherwise attempt to load it
-        if not isinstance(posterior_data, az.InferenceData):
-            if isinstance(posterior_data, str) and os.path.isfile(posterior_data):
-                try:
-                    posterior_data = az.from_netcdf(posterior_data)
-                    logging.info("Loaded posterior data from NetCDF file.")
-                except Exception as e:
-                    raise ValueError(f"Error loading NetCDF file: {e}")
-            else:
-                raise TypeError("posterior_data must be an ArviZ InferenceData object or a valid NetCDF file path.")
-    
-        # Extract the hole positions from the posterior samples
-        hole_positions = self._extract_hole_positions(posterior_data, num_samples=num_samples, random_seed=random_seed)
-
-        # Plot the hole positions on the calendar ring
-        self._plot_hole_positions(hole_positions)
-
-        return None
    
 
