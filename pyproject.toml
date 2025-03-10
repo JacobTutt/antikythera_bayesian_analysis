@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "calender_analysis"
+version = "0.1.0"
+description = "Bayesian statistical analysis of the Antikythera Mechanism"
+readme = "README.md"
+authors = [
+    { name = "Jacob Tutt", email = "jacobtutt@icloud.com" }
+]
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "matplotlib",
+    "seaborn",
+    "iminuit",
+    "tqdm",
+    "tabulate",
+    "jupyter",
+    "ipython",
+    "arviz",
+    "corner",
+    "jax",
+    "jaxlib",
+    "numpyro",
+    "optax",
+    "sphinx>=8.0",
+    "sphinx_rtd_theme>=1.2",
+    "sphinx-autodoc-typehints>=1.23",
+    "nbsphinx",
+]
+requires-python = ">=3.9"
+
+[tool.setuptools.packages.find]
+include = ["calender_analysis*"]
+
+[project.urls]
+# Fill this in 
+Homepage = "https://github.com/JacobTutt/Coursework_S2"
+# Documentation = "https://s1-coursework.readthedocs.io/en/latest/index.html"
+
+
+[tool.sphinx]
+source-dir = "docs/"
+build-dir = "docs/_build"
