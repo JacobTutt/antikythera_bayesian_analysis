@@ -20,6 +20,7 @@ import jax
 import jax.numpy as jnp
 import jax.tree_util as jtu
 from scipy.stats import gaussian_kde
+jax.config.update("jax_enable_x64", True)
 
 # NumPyro
 import numpyro
@@ -506,26 +507,28 @@ class Calender_Analysis:
 
         - **Isotropic Gaussian**: A single standard deviation `sigma` applies to both x and y errors.
         - **Anisotropic Gaussian**: Separate standard deviations `sigma_r` and `sigma_t` for radial 
-          and tangential errors.
+        and tangential errors.
 
         The likelihood is calculated as:
 
         - **Isotropic Model**:
-        \[
-        \log L = -\frac{1}{2} \sum_i \left(\frac{(e_{i,x})^2 + (e_{i,y})^2}{\sigma^2} \right) 
-        - n \log(2\pi\sigma)
-        \]
+
+        .. math::
+            \log L = -\frac{1}{2} \sum_i \left(\frac{(e_{i,x})^2 + (e_{i,y})^2}{\sigma^2} \right) 
+            - n \log(2\pi\sigma)
 
         - **Anisotropic Model**:
-        \[
-        \log L = -\frac{1}{2} \sum_i \left(\frac{(e_{i,r})^2}{\sigma_r^2} + \frac{(e_{i,t})^2}{\sigma_t^2} \right) 
+
+        .. math::
+
+        \log L = -\frac{1}{2} \sum_i \left( \frac{(e_{i,r})^2}{\sigma_r^2} + \frac{(e_{i,t})^2}{\sigma_t^2} \right)
         - n \log(2\pi\sigma_r\sigma_t)
-        \]
 
         where:
-        - \( e_{i,x} = x_{\text{obs},i} - x_{\text{model},i} \) (x-coordinate error)
-        - \( e_{i,y} = y_{\text{obs},i} - y_{\text{model},i} \) (y-coordinate error)
-        - \( e_{i,r} \) and \( e_{i,t} \) are the radial and tangential errors.
+
+        - :math:`e_{i,x} = x_{\text{obs},i} - x_{\text{model},i}` (x-coordinate error)
+        - :math:`e_{i,y} = y_{\text{obs},i} - y_{\text{model},i}` (y-coordinate error)
+        - :math:`e_{i,r}` and :math:`e_{i,t}` are the radial and tangential errors.
 
         If a subset of data (`data`) is provided, the likelihood is computed over only that subset. 
         This enables efficient **stochastic gradient descent (SGD)** or **mini-batch optimization**.
@@ -883,7 +886,7 @@ class Calender_Analysis:
 
             grad_N = - jnp.sum((error_x * grad_error_x_N + error_y * grad_error_y_N) / sigma_val**2)
             grad_r = - jnp.sum((error_x * grad_error_x_r + error_y * grad_error_y_r) / sigma_val**2)
-            grad_sigma = + jnp.sum((error_x**2 + error_y**2) / sigma_val**3) - len(error_x) / sigma_val
+            grad_sigma = + jnp.sum((error_x**2 + error_y**2) / sigma_val**3) - 2*len(error_x) / sigma_val
 
             # Sum of errors for each section - does the following but seperately for each section - as all data points outside of this section go to zero
             grad_x0 = - jnp.sum((error_x * grad_error_x_x0 / sigma_val**2), axis=1) # (num_sections)
@@ -978,7 +981,7 @@ class Calender_Analysis:
             return grad_dict
 
     
-    def compare_performance_grad(self, N, r, x0, y0, alpha, sigma, neg = False, tolerance=1e-3, num_runs=100, subset_size = 40, return_results=False):
+    def compare_performance_grad(self, N, r, x0, y0, alpha, sigma, neg = False, tolerance=1e-2, num_runs=100, subset_size = 40, return_results=False):
         """
         Compare performance and numerical accuracy between automatic and analytical gradient computations.
 
@@ -1233,7 +1236,7 @@ class Calender_Analysis:
 
     # Can i apply early stopping to these ? 
 
-    def max_likelihood_est(self, sampling_type, num_samples=1000, num_iterations=500, learning_rate=0.01, batch_size=None, key=None, derivative='analytic', analyse_results=False, plot_history=False, summary_table = None):
+    def max_likelihood_est(self, sampling_type, num_samples=1000, num_iterations=500, learning_rate=0.01, batch_size=None, key=None, derivative='analytic', plot_history=False, summary_table = None, save_path = None):
         """
         Perform Maximum Likelihood Estimation (MLE) using stochastic optimization methods.
 
@@ -1272,12 +1275,12 @@ class Calender_Analysis:
         derivative : str, optional
             - `'analytic'`: Uses manually computed gradients.
             - `'auto'`: Uses automatic differentiation via `jax.grad()`.
-        analyse_results : bool, optional
-            If `True`, computes and visualizes statistics of estimated MLE parameters.
         plot_history : bool, optional
             If `True`, plots log-likelihood history during optimization.
         summary_table : int, optional
             If provided, displays a table with the top `summary_table` results ranked by log-likelihood.
+        save_path : str, optional
+            If provided, saves the optimisation results to a Pickle file.
 
         Returns
         -------
@@ -1496,273 +1499,105 @@ class Calender_Analysis:
             columns = ["N", "r", "x0", "y0", "alpha", "sigma", "Log-Likelihood"]
             df = pd.DataFrame(table_data, columns=columns)
             display(df)
-
-
+        
+        if save_path is not None: 
+            # save dictionary to pickle file
+            with open(save_path, "wb") as f:
+                pickle.dump(filtered_results, f)
+            logging.info(f"MLE Run results saved to {save_path}")
 
         return filtered_results
     
-
-
-    def max_likelihood_est_iminuit(self, max_ncall = None):
+    def mle_analysis(self, mle_results, figsize=(10, 8)):
         """
-        Perform Maximum Likelihood Estimation (MLE) using `iminuit` for optimization.
+        Visualiwes the observed hole locations and the estimated hole locations 
+        obtained via Maximum Likelihood Estimation (MLE), with clear distinctions 
+        between the observed and modeled data points.
 
-        This function sets up and runs `iminuit` to minimize the negative log-likelihood function 
-        for either an **isotropic** or **anisotropic** model. It initializes parameters, applies 
-        appropriate constraints, and extracts the refined best-fit values and uncertainties.
+        This function:
+        - Identifies the best-fit MLE result based on the maximum log-likelihood.
+        - Computes the corresponding estimated hole positions.
+        - Plots observed hole locations alongside MLE-modeled hole locations.
+        - Annotates selected hole numbers for clarity.
+        - Ensures visually clear distinctions between observed and estimated positions.
 
-        ---
-        **Optimization Process**
-        1. **Initialize model parameters**: Set `N`, `r`, `x0`, `y0`, `alpha`, and `sigma` values 
-        based on the selected model type (`isotropic` or `anisotropic`).
-        2. **Define negative log-likelihood function**: Construct the function to be minimized.
-        3. **Configure `iminuit`**: Set initial values and apply **parameter limits**.
-        4. **Run `iminuit` minimization** using the `migrad` algorithm.
-        5. **Extract best-fit parameters** and associated uncertainties.
-        6. **Return final results** in a structured dictionary.
-
-        ---
-        **Parameters**
+        Parameters
         ----------
-        max_ncall : int, optional
-            Maximum number of function calls for `iminuit.migrad()`. If `None`, the default is used.
+        mle_results : list of dict
+            A list of dictionaries containing MLE results. Each dictionary should include:
+            - `"params"` : dict of best-fit parameters {N, r, x0, y0, alpha}.
+            - `"log_likelihood"` : The log-likelihood value for the corresponding fit.
+        
+        figsize : tuple, optional, default=(10, 8)
+            Figure size for the generated plot.
 
-        ---
-        **Returns**
+        Returns
         -------
-        dict
-            A dictionary containing:
-            - `"N"` : Best-fit **N** value.
-            - `"r"` : Best-fit **r** value.
-            - `"x0"` : Array of best-fit **x0** values.
-            - `"y0"` : Array of best-fit **y0** values.
-            - `"alpha"` : Array of best-fit **alpha** values.
-            - `"sigma"` : Best-fit **sigma** (single value for isotropic, array `[sigma_r, sigma_t]` for anisotropic).
-            - `"errors"` : Dictionary of parameter uncertainties from `iminuit.errors`.
+        None
+        Displays a **scatter plot** of observed and estimated hole positions.
         """
-        #  Isotropic Model - Sigma is a single value
+        # Find MLE best result parameters
+        mle_best_result_dict = max(mle_results, key=lambda x: x["log_likelihood"])
+        mle_best_result = mle_best_result_dict['params']
 
-        N_current = 355.24
-        r_current = 77.34
-        if self.model_type == "isotropic":
-            sigma_current = 0.1
-            # No Filtering
-            if self.num_sections == 8:
-                x0_current = [80,80,80,80,80,80,80,80]
-                y0_current = [135,135,135,135,135,135,135,135]
-                alpha_current = [-2.55,-2.55,-2.55,-2.55,-2.55,-2.55,-2.55,-2.55]
-                def neg_log_likelihood(N, r, x0_1, x0_2, x0_3, x0_4, x0_5, x0_6, x0_7, x0_8, y0_1, y0_2, y0_3, y0_4, y0_5, y0_6, y0_7, y0_8, alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, alpha_7, alpha_8, sigma):
-                    # Compute negative log-likelihood
-                    x0_repacked = jnp.array([x0_1, x0_2, x0_3, x0_4, x0_5, x0_6, x0_7, x0_8])
-                    y0_repacked = jnp.array([y0_1, y0_2, y0_3, y0_4, y0_5, y0_6, y0_7, y0_8])
-                    alpha_repacked = jnp.array([alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, alpha_7, alpha_8])
+        # Find corresponding hole positions
+        mle_hole_positions = self.hole_positions(N=float(mle_best_result["N"]), r=float(mle_best_result["r"]), 
+                                                x0=jnp.array(mle_best_result["x0"]), y0=jnp.array(mle_best_result["y0"]), 
+                                                alpha=np.array(mle_best_result["alpha"]))
+        mle_hole_positions_x = mle_hole_positions.T[0]
+        mle_hole_positions_y = mle_hole_positions.T[1]
 
-                    return self.likelihood(N, r, x0_repacked, y0_repacked, alpha_repacked, sigma, log=True, neg=True, data=None)
+        # Initialise the plot
+        plt.figure(figsize=figsize)
+        sns.set_context("talk")
+        sns.set_style("whitegrid")
+        plt.rcParams["font.family"] = "serif"
 
-                mi = Minuit(neg_log_likelihood, N=N_current, r_best=r_current, x0_1=x0_current[0], x0_2=x0_current[1], x0_3=x0_current[2], x0_4=x0_current[3], x0_5=x0_current[4], x0_6=x0_current[5], x0_7=x0_current[6], x0_8=x0_current[7],
-                            y0_1=y0_current[0], y0_2=y0_current[1], y0_3=y0_current[2], y0_4=y0_current[3], y0_5=y0_current[4], y0_6=y0_current[5], y0_7=y0_current[6], y0_8=y0_current[7],
-                            alpha_1=alpha_current[0], alpha_2=alpha_current[1], alpha_3=alpha_current[2], alpha_4=alpha_current[3], alpha_5=alpha_current[4], alpha_6=alpha_current[5], alpha_7=alpha_current[6], alpha_8=alpha_current[7], sigma=sigma_current)   
-                
+        # Define a color mapping for each unique section
+        unique_sections = self.data["Section ID"].unique()
+        palette = sns.color_palette("Dark2", len(unique_sections))
 
-                mi.limits = {"N": (350, 370), "r": (75, 80), "x0_1": (78, 84), "x0_2": (78, 84), "x0_3": (78, 84), "x0_4": (78, 84), "x0_5": (78, 84), "x0_6": (78, 84), "x0_7": (78, 84), "x0_8": (78, 84),
-                            "y0_1": (133, 139), "y0_2": (133, 139), "y0_3": (133, 139), "y0_4": (133, 139), "y0_5": (133, 139), "y0_6": (133, 139), "y0_7": (133, 139), "y0_8": (133, 139),
-                            "alpha_1": (-2.45, -2.65), "alpha_2": (-2.45, -2.65), "alpha_3": (-2.45, -2.65), "alpha_4": (-2.45, -2.65), "alpha_5": (-2.45, -2.65), "alpha_6": (-2.45, -2.65), "alpha_7": (-2.45, -2.65), "alpha_8": (-2.45, -2.65),
-                            "sigma": (0,2)}
+        # Plot observed and estimated positions
+        plt.scatter(self.data["Mean(X)"], self.data["Mean(Y)"],
+                    color='black', label="Observed Positions", 
+                    s=80, edgecolors='black', alpha=0.6, marker='o')
 
-            # Basic Filtering
-            if self.num_sections == 6:
-                x0_current = [80,80,80,80,80,80]
-                y0_current = [135,135,135,135,135,135]
-                alpha_current = [-2.55,-2.55,-2.55,-2.55,-2.55,-2.55]
-                def neg_log_likelihood(N, r, x0_1, x0_2, x0_3, x0_4, x0_5, x0_6, y0_1, y0_2, y0_3, y0_4, y0_5, y0_6, alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, sigma):
-                    # Compute negative log-likelihood
-                    x0_repacked = jnp.array([x0_1, x0_2, x0_3, x0_4, x0_5, x0_6])
-                    y0_repacked = jnp.array([y0_1, y0_2, y0_3, y0_4, y0_5, y0_6])
-                    alpha_repacked = jnp.array([alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6])
+        plt.scatter(mle_hole_positions_x, mle_hole_positions_y, 
+                    color='red', label="MLE Estimated Positions", 
+                    s=80, alpha=0.6, marker='x')
 
-                    return self.likelihood(N, r, x0_repacked, y0_repacked, alpha_repacked, sigma, log=True, neg=True, data=None)
-                
-                mi = Minuit(neg_log_likelihood, N=N_current, r_best=r_current, x0_1=x0_current[0], x0_2=x0_current[1], x0_3=x0_current[2], x0_4=x0_current[3], x0_5=x0_current[4], x0_6=x0_current[5],
-                            y0_1=y0_current[0], y0_2=y0_current[1], y0_3=y0_current[2], y0_4=y0_current[3], y0_5=y0_current[4], y0_6=y0_current[5],
-                            alpha_1=alpha_current[0], alpha_2=alpha_current[1], alpha_3=alpha_current[2], alpha_4=alpha_current[3], alpha_5=alpha_current[4], alpha_6=alpha_current[5], sigma=sigma_current)
-                
-                mi.limits = {"N": (350, 370), "r": (75, 80), "x0_1": (75, 85), "x0_2": (75, 85), "x0_3": (75, 85), "x0_4": (75, 85), "x0_5": (75, 85), "x0_6": (75, 85), 
-                            "y0_1": (133, 139), "y0_2": (133, 139), "y0_3": (133, 139), "y0_4": (133, 139), "y0_5": (133, 139), "y0_6": (133, 139), "alpha_1": (-2.45, -2.65), 
-                            "alpha_2": (-2.45, -2.65), "alpha_3": (-2.45, -2.65), "alpha_4": (-2.45, -2.65), "alpha_5": (-2.45, -2.65), "alpha_6": (-2.45, -2.65), "sigma": (0,2)}
-              
-            elif self.num_sections == 4:
-                x0_current = [80,80,80,80]
-                y0_current = [135,135,135,135]
-                alpha_current = [-2.55,-2.55,-2.55,-2.55]
-                def neg_log_likelihood(N, r, x0_1, x0_2, x0_3, x0_4, y0_1, y0_2, y0_3, y0_4, alpha_1, alpha_2, alpha_3, alpha_4, sigma):
-                    # Compute negative log-likelihood
-                    x0_repacked = jnp.array([x0_1, x0_2, x0_3, x0_4])
-                    y0_repacked = jnp.array([y0_1, y0_2, y0_3, y0_4])
-                    alpha_repacked = jnp.array([alpha_1, alpha_2, alpha_3, alpha_4])
+        # Annotate every 3rd hole, adjusting position for visibility
+        for i in range(self.n_holes):
+            hole_num_int = int(self.data.iloc[i]["Hole"])
+            if (hole_num_int - 1) % 3 == 0:
+                x, y = self.data.iloc[i]["Mean(X)"], self.data.iloc[i]["Mean(Y)"]
+                offsets = {
+                    hole_num_int < 29: (-3, 0, 'right', 'center'),
+                    28 < hole_num_int < 46: (-4, 0, 'center', 'top'),
+                    45 < hole_num_int < 69: (0, -1, 'center', 'top'),
+                    hole_num_int >= 69: (5, 0, 'left', 'center')
+                }
+                dx, dy, ha, va = offsets[True]
+                plt.text(x + dx, y + dy, str(hole_num_int), fontsize=12, ha=ha, va=va, color='black')
 
-                    return self.likelihood(N, r, x0_repacked, y0_repacked, alpha_repacked, sigma, log=True, neg=True, data=None)
+        # Configure legend
+        plt.legend(title="Hole Locations", loc="upper right", fontsize=12, frameon=True)
 
-                mi = Minuit(neg_log_likelihood, N=N_current, r_best=r_current, x0_1=x0_current[0], x0_2=x0_current[1], x0_3=x0_current[2], x0_4=x0_current[3],
-                            y0_1=y0_current[0], y0_2=y0_current[1], y0_3=y0_current[2], y0_4=y0_current[3],
-                            alpha_1=alpha_current[0], alpha_2=alpha_current[1], alpha_3=alpha_current[2], alpha_4=alpha_current[3], sigma=sigma_current)
-                
-                mi.limits = {"N": (350, 370), "r": (75, 80), "x0_1": (75, 85), "x0_2": (75, 85), "x0_3": (75, 85), "x0_4": (75, 85),
-                    "y0_1": (133, 139), "y0_2": (133, 139), "y0_3": (133, 139), "y0_4": (133, 139), "alpha_1": (-2.45, -2.65), "alpha_2": (-2.45, -2.65), 
-                    "alpha_3": (-2.45, -2.65), "alpha_4": (-2.45, -2.65), "sigma": (0,2)}
-                
+        # Configure plot limits and labels
+        x_min, x_max = self.data["Mean(X)"].min(), self.data["Mean(X)"].max()
+        y_min, y_max = self.data["Mean(Y)"].min(), self.data["Mean(Y)"].max()
+        plt.xlim(x_min - 5, x_max + 5.5)
+        plt.ylim(y_min - 4, y_max + 4)
+        plt.xlabel("X Position (mm)", fontsize=14)
+        plt.ylabel("Y Position (mm)", fontsize=14)
+        plt.title("Measured and MLE Modeled Hole Locations", fontsize=16)
+        plt.grid(True, linestyle=":", linewidth=0.6, alpha=0.8)
+        plt.minorticks_on()
 
-        # Anistropic Model - Sigma is an array
-        elif self.model_type == "anisotropic":
-            sigma_current = [0.1, 0.1]
-
-            # No Filtering (num_sections = 8)
-            if self.num_sections == 8:
-                x0_current = [80,80,80,80,80,80,80,80]
-                y0_current = [135,135,135,135,135,135,135,135]
-                alpha_current = [-2.55,-2.55,-2.55,-2.55,-2.55,-2.55,-2.55,-2.55]
-                def neg_log_likelihood(N, r, 
-                                    x0_1, x0_2, x0_3, x0_4, x0_5, x0_6, x0_7, x0_8, 
-                                    y0_1, y0_2, y0_3, y0_4, y0_5, y0_6, y0_7, y0_8, 
-                                    alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, alpha_7, alpha_8, 
-                                    sigma_r, sigma_t):
-                    """
-                    Negative log-likelihood function for anisotropic model (8 sections).
-                    """
-                    x0_repacked = jnp.array([x0_1, x0_2, x0_3, x0_4, x0_5, x0_6, x0_7, x0_8])
-                    y0_repacked = jnp.array([y0_1, y0_2, y0_3, y0_4, y0_5, y0_6, y0_7, y0_8])
-                    alpha_repacked = jnp.array([alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, alpha_7, alpha_8])
-                    sigma_repacked = jnp.array([sigma_r, sigma_t])  # Two sigma values
-                    return self.likelihood(N, r, x0_repacked, y0_repacked, alpha_repacked, sigma_repacked, log=True, neg=True, data=None)
-                
-
-                # Initialize Minuit with explicit parameters
-                mi = Minuit(
-                    neg_log_likelihood, 
-                    N=N_current, r=r_current,
-                    x0_1=x0_current[0], x0_2=x0_current[1], x0_3=x0_current[2], x0_4=x0_current[3], 
-                    x0_5=x0_current[4], x0_6=x0_current[5], x0_7=x0_current[6], x0_8=x0_current[7],
-                    y0_1=y0_current[0], y0_2=y0_current[1], y0_3=y0_current[2], y0_4=y0_current[3], 
-                    y0_5=y0_current[4], y0_6=y0_current[5], y0_7=y0_current[6], y0_8=y0_current[7],
-                    alpha_1=alpha_current[0], alpha_2=alpha_current[1], alpha_3=alpha_current[2], alpha_4=alpha_current[3], 
-                    alpha_5=alpha_current[4], alpha_6=alpha_current[5], alpha_7=alpha_current[6], alpha_8=alpha_current[7],
-                    sigma_r=sigma_current[0], sigma_t=sigma_current[1]  # Two sigma values
-                )
-
-                mi.limits = {"N": (350, 370), "r": (75, 80), "x0_1": (75, 85), "x0_2": (75, 85), "x0_3": (75, 85), "x0_4": (75, 85), "x0_5": (75, 85), "x0_6": (75, 85), "x0_7": (75, 85), "x0_8": (75, 85),
-                            "y0_1": (133, 139), "y0_2": (133, 139), "y0_3": (133, 139), "y0_4": (133, 139), "y0_5": (133, 139), "y0_6": (133, 139), "y0_7": (133, 139), "y0_8": (133, 139),
-                            "alpha_1": (-2.45, -2.65), "alpha_2": (-2.45, -2.65), "alpha_3": (-2.45, -2.65), "alpha_4": (-2.45, -2.65), "alpha_5": (-2.45, -2.65), "alpha_6": (-2.45, -2.65), "alpha_7": (-2.45, -2.65), "alpha_8": (-2.45, -2.65),
-                            "sigma_r": (0,2), "sigma_t": (0,2)}
-                                        
-            # Filtering Case (num_sections = 6)
-            elif self.num_sections == 6:
-                print('here')
-                x0_current = [80,80,80,80,80,80]
-                y0_current = [135,135,135,135,135,135]
-                alpha_current = [-2.55,-2.55,-2.55,-2.55,-2.55,-2.55]
-            
-                def neg_log_likelihood(N, r, 
-                                    x0_1, x0_2, x0_3, x0_4, x0_5, x0_6, 
-                                    y0_1, y0_2, y0_3, y0_4, y0_5, y0_6, 
-                                    alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, 
-                                    sigma_r, sigma_t):
-                    """
-                    Negative log-likelihood function for anisotropic model with 6 sections.
-                    """
-                    x0_repacked = jnp.array([x0_1, x0_2, x0_3, x0_4, x0_5, x0_6])
-                    y0_repacked = jnp.array([y0_1, y0_2, y0_3, y0_4, y0_5, y0_6])
-                    alpha_repacked = jnp.array([alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6])
-                    sigma_repacked = jnp.array([sigma_r, sigma_t])
-                    neg_like = self.likelihood(N, r, x0_repacked, y0_repacked, alpha_repacked, sigma_repacked, log=True, neg=True, data=None)
-                    print(neg_like)
-                    return neg_like
-
-                # Initialize Minuit
-                mi = Minuit(
-                    neg_log_likelihood, 
-                    N=N_current, r=r_current,
-                    x0_1=x0_current[0], x0_2=x0_current[1], x0_3=x0_current[2], x0_4=x0_current[3], x0_5=x0_current[4], x0_6=x0_current[5],
-                    y0_1=y0_current[0], y0_2=y0_current[1], y0_3=y0_current[2], y0_4=y0_current[3], y0_5=y0_current[4], y0_6=y0_current[5],
-                    alpha_1=alpha_current[0], alpha_2=alpha_current[1], alpha_3=alpha_current[2], alpha_4=alpha_current[3], alpha_5=alpha_current[4], alpha_6=alpha_current[5],
-                    sigma_r=sigma_current[0], sigma_t=sigma_current[1]  # Two sigma values
-                )
-
-                mi.limits = {"N": (350, 370), "r": (75, 80), "x0_1": (75, 85), "x0_2": (75, 85), "x0_3": (75, 85), "x0_4": (75, 85), "x0_5": (75, 85), "x0_6": (75, 85), 
-                                "y0_1": (133, 139), "y0_2": (133, 139), "y0_3": (133, 139), "y0_4": (133, 139), "y0_5": (133, 139), "y0_6": (133, 139), "alpha_1": (-2.45, -2.65), 
-                                "alpha_2": (-2.45, -2.65), "alpha_3": (-2.45, -2.65), "alpha_4": (-2.45, -2.65), "alpha_5": (-2.45, -2.65), "alpha_6": (-2.45, -2.65), "sigma_r": (0,2), "sigma_t": (0,2)}
-
-            # Filtering Case (num_sections = 4)
-            elif self.num_sections == 4:
-                x0_current = [80,80,80,80]
-                y0_current = [135,135,135,135]
-                alpha_current = [-2.55,-2.55,-2.55,-2.55]
-            
-                def neg_log_likelihood(N, r, 
-                                    x0_1, x0_2, x0_3, x0_4, 
-                                    y0_1, y0_2, y0_3, y0_4, 
-                                    alpha_1, alpha_2, alpha_3, alpha_4, 
-                                    sigma_r, sigma_t):
-                    """
-                    Negative log-likelihood function for anisotropic model with 4 sections.
-                    """
-                    x0_repacked = jnp.array([x0_1, x0_2, x0_3, x0_4])
-                    y0_repacked = jnp.array([y0_1, y0_2, y0_3, y0_4])
-                    alpha_repacked = jnp.array([alpha_1, alpha_2, alpha_3, alpha_4])
-                    sigma_repacked = jnp.array([sigma_r, sigma_t])
-
-                    return self.likelihood(N, r, x0_repacked, y0_repacked, alpha_repacked, sigma_repacked, log=True, neg=True, data=None)
-
-                mi = Minuit(
-                    neg_log_likelihood, 
-                    N=N_current, r=r_current,
-                    x0_1=x0_current[0], x0_2=x0_current[1], x0_3=x0_current[2], x0_4=x0_current[3],
-                    y0_1=y0_current[0], y0_2=y0_current[1], y0_3=y0_current[2], y0_4=y0_current[3],
-                    alpha_1=alpha_current[0], alpha_2=alpha_current[1], alpha_3=alpha_current[2], alpha_4=alpha_current[3],
-                    sigma_r=sigma_current[0], sigma_t=sigma_current[1]  # Two sigma values
-                )
-
-                mi.limits = {"N": (350, 370), "r": (75, 80), "x0_1": (75, 85), "x0_2": (75, 85), "x0_3": (75, 85), "x0_4": (75, 85),
-                    "y0_1": (133, 139), "y0_2": (133, 139), "y0_3": (133, 139), "y0_4": (133, 139), "alpha_1": (-2.45, -2.65), "alpha_2": (-2.45, -2.65), 
-                    "alpha_3": (-2.45, -2.65), "alpha_4": (-2.45, -2.65), "sigma_r": (0,2), "sigma_t": (0,2)}
-
-        # ------------------ Step 4: Run `iminuit` Optimisation ------------------
-
-        mi.migrad(ncall = max_ncall)
-
-        # ------------------ Step 5: Extract Refined Parameters ------------------
-
-        refined_params = mi.values.to_dict()
-        param_errors = mi.errors.to_dict()
-
-        # Split into individual components
-        refined_x0 = np.array([refined_params[f"x0_{i}"] for i in range(self.num_sections)])
-        refined_y0 = np.array([refined_params[f"y0_{i}"] for i in range(self.num_sections)])
-        refined_alpha = np.array([refined_params[f"alpha_{i}"] for i in range(self.num_sections)])
-        if self.model_type == "isotropic":
-            refined_sigma = refined_params["sigma"]
-        elif self.model_type == "anisotropic":
-            refined_sigma = np.array([refined_params["sigma_r"], refined_params["sigma_t"]])
-
-        # ------------------ Step 6: Store Results ------------------
-        final_results = {
-            "N": refined_params["N_best"],
-            "r": refined_params["r_best"],
-            "x0": refined_x0,
-            "y0": refined_y0,
-            "alpha": refined_alpha,
-            "sigma": refined_sigma,
-            "errors": param_errors
-        }
-
-        print(mi)
-
-        return final_results
-
-
+        plt.show()
     
 
-    
-
-    def NumPryo_model(self):
+    def numpryo_model(self):
         """
         Defines the model and the likelihood function for Bayesian inference using NumPyro.
 
@@ -1883,7 +1718,7 @@ class Calender_Analysis:
         # Initialize the RNG key
         rng_key = jax.random.PRNGKey(random_seed)
         # Define the NUTS sampler with hyperparameter options
-        nuts_kernel = NUTS(self.NumPryo_model, step_size=step_size, target_accept_prob=acceptance_prob, dense_mass=dense_mass)
+        nuts_kernel = NUTS(self.numpryo_model, step_size=step_size, target_accept_prob=acceptance_prob, dense_mass=dense_mass)
         # Initialise MCMC
         mcmc = MCMC(nuts_kernel, num_warmup=burnin_period, num_samples=n_samples, num_chains=n_chains, progress_bar=progress_bar)
         # Start timing
@@ -2123,6 +1958,13 @@ class Calender_Analysis:
                 raise ValueError("Error: save_path must be a string.")
             if not save_path.lower().endswith(".nc"):
                 raise ValueError("Error: The file is not a valid NetCDF (.nc) file.")
+            
+        # Filter for best result
+        # Convert results to DataFrame
+        results_df = pd.DataFrame(best_params)
+
+        # Find best combination (lowest TPES)
+        best_params = results_df.loc[results_df["Time per Effective Sample"].idxmin()].to_dict()
 
         # Extract best hyperparameters from the dictionary
         step_size = best_params["Step Size"]
@@ -2890,6 +2732,9 @@ class Calender_Analysis:
         ax.set_xlabel(r"Prior Mass Shrinkage $X$")
         ax.set_ylabel(r"$\log L$")
         ax.set_xscale('log')
+        # Determine max of y data
+        y_max_data = max(logLs)
+        ax.set_ylim(bottom=None, top=y_max_data)
         ax.set_yscale('symlog')
         ax.set_title(r"Likelihood Evolution with Prior Mass")
         ax.legend()
@@ -2899,7 +2744,7 @@ class Calender_Analysis:
 
 
     
-    def savage_dickey_comparison(self, best_params, burnin_period=2000, n_samples_posterior=10000, n_samples_prior=10000, random_seed=0, tol=0.01, show_plots=True, random_key=None):
+    def savage_dickey_comparison(self, best_params, burnin_period=2000, n_samples_posterior=10000, n_samples_prior=10000, random_seed=0, show_plots=True, random_key=None):
         """
         Performs the Savage-Dickey density ratio test for comparing nested models.
         
@@ -2979,6 +2824,9 @@ class Calender_Analysis:
         _, thinned_parameters = self.run_hmc_optimised(best_params, burnin_period=burnin_period, n_samples=n_samples_posterior,
                                                     n_chains=4, random_seed=random_seed, save_path=None, traceplot=None)
 
+        # Tolerance so can see line
+        tol=0.01
+
         # Extract posterior samples
         sigma_t_post = thinned_parameters.posterior["sigma_t"].values.flatten()
         sigma_r_post = thinned_parameters.posterior["sigma_r"].values.flatten()
@@ -3051,7 +2899,7 @@ class Calender_Analysis:
             # Extract axes for modifying
             axes_corner = np.array(fig.axes).reshape(2, 2)
 
-            # Overlay tolerance lines
+            # Overlay slice lines
             ax = axes_corner[0, 0]  
             ax.axvline(0, color=config["line_color"], linestyle=config["line_style"], alpha=config["line_alpha"])
             ax.set_xlim(x_min, x_max)
@@ -3091,7 +2939,7 @@ class Calender_Analysis:
             ax = axes[0]
             contour = ax.contourf(X_mesh, Y_mesh, density_values, levels=config["kde_levels"], cmap=config["cmap"])
             
-            ax.axvline(0, color=config["line_color"], linestyle=config["line_style"], alpha=config["line_alpha"], lw=2, label=r"$\pm$ tol window")
+            ax.axvline(0, color=config["line_color"], linestyle=config["line_style"], alpha=config["line_alpha"], lw=2, label=r"$\sigma_t - \sigma_r$ = 0")
 
             ax.set_xlabel(r"$\sigma_t - \sigma_r$", fontsize=config["font_size"])
             ax.set_ylabel(r"$\sigma_t + \sigma_r$", fontsize=config["font_size"])
@@ -3121,856 +2969,3 @@ class Calender_Analysis:
             plot_kde(samples_prior, x_extended_min_prior, x_extended_max_prior, y_min_prior, y_max_prior, "Prior KDE")
 
         return {"posterior_probability": prob_post, "prior_probability": prob_prior, "savage_dickey_ratio": savage_dickey_ratio}
-
-            
-
-
-        
-        # # Stack into (N, 2) shape for visualization
-        # samples_transformed = np.vstack([X, Y]).T
-
-        # # --- Corner Plot with Vertical Lines at ±epsilon ---
-        # if show_plots:
-        #     logging.info("Generating corner plot...")
-        #     fig = corner.corner(samples_transformed, labels=[r"$\sigma_t - \sigma_r$", r"$\sigma_t + \sigma_r$"],
-        #                   quantiles=[0.16, 0.5, 0.84], show_titles=True, title_fmt=".2f", 
-        #                   title_kwargs={"fontsize": 12})
-
-        #     # Add vertical dashed lines at ±epsilon in the first subplot
-        #     axes = np.array(fig.axes).reshape(2, 2)  # Convert to 2D array of axes
-        #     axes[1, 0].axvline(x=-tol, color="black", linestyle="dashed", alpha=0.7)
-        #     axes[1, 0].axvline(x=tol, color="black", linestyle="dashed", alpha=0.7)
-
-        #     plt.show()
-
-        # # --- KDE Estimation ---
-        # logging.info("Performing KDE on transformed posterior samples...")
-        # kde = gaussian_kde(samples_transformed.T)  # KDE expects (2, N) shape
-
-        # # Create a grid for KDE visualization
-        # x_grid = np.linspace(X.min(), X.max(), 100)
-        # y_grid = np.linspace(Y.min(), Y.max(), 100)
-        # X_mesh, Y_mesh = np.meshgrid(x_grid, y_grid)
-        # positions = np.vstack([X_mesh.ravel(), Y_mesh.ravel()])
-
-        # # Evaluate KDE
-        # density_values = kde(positions).reshape(X_mesh.shape)
-
-        # # --- KDE Contour Plot with Vertical Lines at ±epsilon ---
-        # if show_plots:
-        #     fig, ax = plt.subplots(figsize=(8, 6))
-        #     ax.contourf(X_mesh, Y_mesh, density_values, levels=30, cmap="Blues")
-        #     ax.axvline(x=-tol, color="black", linestyle="dashed", alpha=0.7, label=r"$\pm \epsilon$ window")
-        #     ax.axvline(x=tol, color="black", linestyle="dashed", alpha=0.7)
-        #     ax.set_xlabel(r"$\sigma_t - \sigma_r$")
-        #     ax.set_ylabel(r"$\sigma_t + \sigma_r$")
-        #     ax.set_title("2D KDE of Transformed Parameters")
-        #     ax.legend()
-        #     plt.show()
-
-        # # --- Compute Conditional Probability P(sigma_t - sigma_r ≈ 0) ---
-        # logging.info(f"Computing P(σ_t - σ_r ≈ 0) using KDE with ε = {tol}...")
-
-        # # Define a small region around 0
-        # idx = (X >= -tol) & (X <= tol)  # Select samples near 0
-
-        # if np.sum(idx) == 0:
-        #     logging.warning("No samples found in the small region around zero. Probability estimate may be unreliable.")
-        #     return 0.0  # No probability mass at zero
-
-        # # Compute KDE probability density at X = 0
-        # prob_density_at_0 = np.mean(kde(samples_transformed.T[:, idx]))
-
-        # # Approximate integral P(sigma_t - sigma_r ≈ 0)
-        # P_sigma_t_eq_sigma_r = prob_density_at_0 * (2 * tol)  # Approximate integral
-
-        # logging.info(f"Estimated P(σ_t - σ_r ≈ 0): {P_sigma_t_eq_sigma_r:.4f}")
-        
-        # return P_sigma_t_eq_sigma_r
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    # def plot_nested_sampling_3(self, step_size=1, acceptance_prob=0.9, dense_mass=False, burnin_period=2000, initial_samples=1000, live_samples = 1000, random_seed=0):
-    #     ""
-
-
-    #     logging.info(f"This nested sampling is using a NUTS with step_size={step_size}, acceptance_prob={acceptance_prob}, dense_mass={dense_mass}")
-    #     logging.info(f"Running HMC with {burnin_period} warm-up samples and {initial_samples} samples to determine autocorrelation length.")
-    #     rng_key = jax.random.PRNGKey(random_seed)
-    #     nuts_kernel = NUTS(self.NumPryo_model, step_size=step_size, target_accept_prob=acceptance_prob, dense_mass=dense_mass)
-    #     # Initialise MCMC
-    #     mcmc = MCMC(nuts_kernel, num_warmup=burnin_period, num_samples=initial_samples, num_chains=1, progress_bar=False)
-    #     # Run MCMC
-    #     mcmc.run(rng_key)
-
-    #     # Compute autocorrelation length
-    #     initial_investigation = az.from_numpyro(mcmc)
-    #     eff_sample_size = az.ess(initial_investigation).to_dataframe().mean().min()
-    #     autocorr_length = int(initial_samples/eff_sample_size)
-
-    #     logging.info(f"Achieved Effective Sample Size: {eff_sample_size:.0f}, corrosponding to a Autocorrelation Length: {autocorr_length:.0f}")
-
-    #     n_required_live_init = live_samples * autocorr_length
-
-    #     logging.info(f"To generate {live_samples} independent samples, {n_required_live_init} points are required to be generated and then thinned.")
-
-
-    #     # === CONTINUE SAMPLING FROM WHERE WE LEFT OFF ===
-
-    #     # Generate new PRNG key
-    #     rng_key_new = jax.random.PRNGKey()  
-
-    #     # Restore the state and continue sampling
-    #     mcmc.post_warmup_state = mcmc.last_state # Restore last state
-    #     mcmc.post_warmup_state.rng_key = rng_key_new  # Use a new RNG key
-    #     mcmc.run(rng_key_new, num_samples=n_required_live_init)
-
-    #     # Combine old and new samples
-    #     new_samples = mcmc.get_samples()
-
-    #     # If needed, concatenate the old and new samples
-    #     import numpy as np
-    #     all_samples = {k: np.concatenate([mcmc.get_samples()[k], new_samples[k]]) for k in new_samples.keys()}
-
-    #     print("Successfully extended the MCMC chain!")
-
-    #     # Run Nested Sampling
-
-
-
-
-    # def run_nested_sampling_own(self, num_live=500, max_iter=1000, tol=1e-3, seed=0):
-    #     """
-    #     Implements the Nested Sampling algorithm within the model class.
-
-    #     - Uses `self.sample_from_priors` for constrained sampling.
-    #     - Uses `self.likelihood` for likelihood evaluations.
-    #     - Computes Bayesian evidence `Z` and posterior distributions.
-
-    #     Parameters
-    #     ----------
-    #     num_live : int, optional, default=500
-    #         Number of live points used in nested sampling.
-    #     max_iter : int, optional, default=1000
-    #         Maximum number of iterations before termination.
-    #     tol : float, optional, default=1e-3
-    #         Convergence tolerance for stopping criterion.
-    #     seed : int, optional, default=42
-    #         Random seed for reproducibility.
-
-    #     Returns
-    #     -------
-    #     dict
-    #         Dictionary containing:
-    #         - `"logZ"` : Estimated log evidence.
-    #         - `"samples"` : List of accepted posterior samples.
-    #         - `"weights"` : Importance weights of samples.
-    #         - `"logLs"` : Log-likelihoods of sampled points.
-    #     """
-
-    #     # Initialize random key
-    #     key = jax.random.PRNGKey(seed)
-
-    #     # Draw initial live points from prior
-    #     key, subkey = jax.random.split(key)
-    #     live_points = self.sample_from_priors(subkey, num_samples=num_live)
-
-    #     # Compute initial log-likelihoods
-    #     live_log_likelihoods = jnp.array([
-    #         self.likelihood(**{k: live_points[k][i] for k in live_points.keys()}, log=True)
-    #         for i in range(num_live)
-    #     ])
-
-    #     # Storage for posterior samples, weights, and likelihoods
-    #     samples = []
-    #     weights = []
-    #     logLs = []
-
-    #     # Initialize prior volume shrinkage
-    #     log_X = 0.0  # Log of prior volume
-    #     dX = 1.0 / num_live  # Initial shrinkage per iteration
-    #     logZ = -np.inf  # Log-evidence estimate
-
-    #     # Nested Sampling Loop
-    #     for iteration in range(max_iter):
-    #         # Find the worst live point (lowest likelihood)
-    #         min_idx = jnp.argmin(live_log_likelihoods)
-
-    #         # Store dead point and log-likelihood
-    #         dead_point = {k: live_points[k][min_idx] for k in live_points.keys()}
-    #         logL_dead = live_log_likelihoods[min_idx]
-    #         samples.append(dead_point)
-    #         logLs.append(logL_dead)
-
-    #         # Compute weight for this sample
-    #         weight = np.exp(log_X) * (1 - np.exp(-dX))
-    #         weights.append(weight)
-
-    #         # Shrink prior volume
-    #         log_X -= dX
-
-    #         # Constrained prior sampling: find new sample above `logL_dead`
-    #         key, subkey = jax.random.split(key)
-    #         new_sample, new_logL = self._constrained_prior_sample(subkey, min_logL=logL_dead)
-    #         # Replace the worst live point
-    #         for key in live_points.keys():
-    #             live_points[key] = jnp.where(
-    #                 jnp.arange(num_live) == min_idx, new_sample[key], live_points[key]
-    #             )
-    #         live_log_likelihoods = jnp.where(
-    #             jnp.arange(num_live) == min_idx, new_logL, live_log_likelihoods
-    #         )
-
-    #         # Update evidence estimate
-    #         new_logZ = np.logaddexp(logZ, logL_dead + log_X)
-    #         if abs(new_logZ - logZ) < tol:
-    #             break
-    #         logZ = new_logZ
-
-    #     return {
-    #         "logZ": logZ,
-    #         "samples": samples,
-    #         "weights": weights,
-    #         "logLs": logLs
-    #     }
-    
-
-    # def _constrained_prior_sample(self, key, min_logL):
-    #     """
-    #     Samples from the prior **subject to** a likelihood constraint.
-
-    #     Parameters
-    #     ----------
-    #     key : jax.random.PRNGKey
-    #         Random key for JAX-based sampling.
-    #     min_logL : float
-    #         The minimum log-likelihood threshold.
-
-    #     Returns
-    #     -------
-    #     tuple
-    #         (new_sample, new_logL) where:
-    #         - `new_sample` is a dictionary of parameter values.
-    #         - `new_logL` is the log-likelihood of the new sample.
-    #     """
-    #     while True:
-    #         key, subkey = jax.random.split(key)
-    #         new_sample = self.sample_from_priors(subkey, num_samples=1)
-    #         print(new_sample)
-
-    #         # Compute log-likelihood of new sample
-    #         new_logL = self.likelihood(**{k: new_sample[k][0] for k in new_sample.keys()}, log=True)
-
-    #         # Accept sample if likelihood is above the minimum threshold
-    #         if new_logL > min_logL:
-    #             return new_sample, new_logL
-            
-
-
-
-
-
-
-
-
-
-    # def max_likelihood_est(self, sampling_type, num_samples=1000, num_iterations=500, learning_rate=0.01, batch_size=None, key=None, derivative='analytic', analyse_results=False, plot_history = False):
-    #     """
-    #     Perform Maximum Likelihood Estimation (MLE) using various optimization algorithms.
-
-    #     This function estimates the **maximum likelihood parameters** of the Bayesian model by optimizing 
-    #     the log-likelihood function using different numerical methods.
-
-    #     The user can specify whether to use **automatic differentiation (JAX autodiff)** or 
-    #     **analytically derived gradients** for optimization. Mini-batch processing is supported for 
-    #     **SGD, Adam, and L-BFGS** to enhance computational efficiency.
-
-    #     ---
-    #     **Optimization Methods:**
-    #     - **SGD (Stochastic Gradient Descent)**
-    #       - Suitable for large datasets with stochastic updates.
-    #       - Requires `learning_rate` and `num_iterations`.
-    #       - Supports mini-batching (`batch_size`).
-
-    #     - **Adam Optimizer**
-    #       - Similar to SGD but with adaptive momentum updates.
-    #       - Requires `learning_rate` and `num_iterations`.
-    #       - Supports mini-batching (`batch_size`).
-
-    #     ---
-    #     **Parameters**
-    #     ----------
-    #     sampling_type : str
-    #         Optimization method to use. Must be one of:
-    #         - `'SGD'`
-    #         - `'Adam'`
-    #     num_samples : int, optional
-    #         Number of different parameter initializations to optimize. Default is `1000`.
-    #     num_iterations : int, optional
-    #         Number of iterations per optimization. Default is `500`.
-    #     learning_rate : float, optional
-    #         Learning rate for gradient-based optimizers. Default is `0.01`.
-    #     batch_size : int, optional
-    #         Mini-batch size for stochastic optimizers. If `None`, uses full batch. Default is `None`.
-    #     key : jax.random.PRNGKey, optional
-    #         Random key for reproducibility. Default is `None` (fixed seed used).
-    #     derivative : str, optional
-    #         - `'analytic'`: Uses manually computed gradients (default).
-    #         - `'auto'`: Uses JAX autodiff via `jax.grad()`.
-    #     analyse_results : bool, optional
-    #         If `True`, computes and visualizes summary statistics of MLE results.
-    #     plot_history : bool, optional
-    #         If `True`, plots log-likelihood history during optimization.
-
-    #     ---
-    #     **Returns**
-    #     -------
-    #     dict
-    #         Dictionary containing:
-    #         - `"best_params"` : The parameter set with the highest log-likelihood.
-    #         - `"max_log_likelihood"` : Maximum log-likelihood value obtained.
-    #     """
-
-    #     # Ensure that the sampling type is valid
-    #     if sampling_type not in ['SGD', 'Adam']:
-    #         raise ValueError("sampling_type must be one of ['SGD', 'Adam'].")
-        
-    #     # Ensure that if plotting history it is simply a single optimisation
-    #     if plot_history and num_samples > 1:
-    #         raise ValueError("Plot of log-likelihood history is only supported for single sample optimisation as an overview of the training process.")
-        
-    #     # Allow for either stochastic or full batch gradient computation
-    #     # If batch size is provided, ensure it is valid - ie less than total number of data points
-    #     if batch_size is not None and batch_size > self.data.shape[0]:
-    #             raise ValueError(f"Batch size cannot exceed the total number of data points: {self.data.shape[0]}.")
-
-    #     # Allow user to choose between automatic and analytical gradients - analytical is default as shown to be faster and more memory efficient
-    #     if derivative not in ['analytic', 'auto']:
-    #         raise ValueError("Derivative method must be either 'analytic' or 'auto'.")
-        
-    #     # Ensure a valid key is available to the function
-    #     if key is None:
-    #         key = jax.random.PRNGKey(42)
-    #     else:
-    #         key = jax.random.PRNGKey(key)
-        
-    #     # Initialize a list to store the trajectory of parameter estimates and log-likelihoods - allows them to be analysed later
-    #     all_results = [] 
-
-    #     # As this is only every used for single sample optimisation can be initialised globally here
-    #     if plot_history:
-    #         all_results_log_likelihood = []
-
-    #         def _plot_log_likelihood_history(all_results_log_likelihood):
-    #             """Plot the log-likelihood history, removing the first 10% of iterations for clarity."""
-
-    #             # Remove first 20% of iterations
-    #             num_iterations = len(all_results_log_likelihood)
-    #             cutoff = max(1, int(0.2 * num_iterations)) 
-    #             plot_data = all_results_log_likelihood[cutoff:]
-
-    #             # Set high-quality plot settings
-    #             plt.figure(figsize=(8, 6), dpi=300) 
-    #             sns.set_context("talk")  
-    #             sns.set_style("whitegrid") 
-
-    #             # Plot log-likelihood history
-    #             plt.plot(plot_data, linestyle='-', color='darkblue', linewidth=2, alpha=0.8, label="Negative Log-Likelihood")
-
-    #             # Labels and formatting
-    #             plt.xlabel("Iterations", fontsize=12, fontweight='bold')
-    #             plt.ylabel("Negative Log-Likelihood", fontsize=12, fontweight='bold')
-    #             plt.title("Log-Likelihood Convergence", fontsize=12, fontweight='bold', pad=15)
-    #             plt.yscale("log")
-    #             plt.grid(which="both", linestyle="--", linewidth=0.7, alpha=0.6)
-    #             plt.xticks(fontsize=10)
-    #             plt.yticks(fontsize=10)
-    #             plt.tight_layout()
-    #             plt.legend(fontsize=10)
-    #             plt.show()
-
-    #     # Define the loss function to be minimized - negative log-likelihood
-    #     def loss_fn(params, data_subset):
-    #         """Negative log-likelihood function that will be minimised."""
-    #         return self.likelihood(params["N"], params["r"], params["x0"], params["y0"], params["alpha"], params["sigma"], 
-    #                                 log=True, neg=True, data=data_subset)
-        
-    #     # Define the gradient function based on user choice for relevant methods
-    #     if sampling_type in ['SGD', 'Adam']:
-    #         if derivative == 'auto':
-    #             grad_fn = jax.grad(loss_fn)
-    #         else:
-    #             def grad_fn(params, data_subset):
-    #                 """Derivative Negative log-likelihood function that will be minimised."""
-    #                 return self.analytic_grad_loglikelihood(params["N"], params["r"], params["x0"], params["y0"], params["alpha"], 
-    #                                                         params["sigma"], neg=True, data=data_subset)
-        
-
-    #     # Sample from the priors simply as initialisation position for MLE optimisation
-    #     # All initial samples are retrieved in one go
-    #     prior_samples = self.sample_from_priors(key, num_samples=num_samples)
-
-    #     # ------------------ Stochastic Gradient Descent ------------------
-
-    #     if sampling_type == 'SGD':
-
-    #         # Define the optimiser and initialise it with the learning rate - optax
-    #         optimizer = optax.sgd(learning_rate)
-
-    #         # Loop over all num_samples and optimise each one
-    #         for i in tqdm(range(num_samples), desc="Optimizing MLE using SGD:", leave=True):
-
-    #             # Extract the parameters for the current sample from the dictionary - ensure they are jnp arrays
-    #             params = {k: jnp.array(v[i]) for k, v in prior_samples.items()}
-
-    #             # Enter initial state for the optimiser
-    #             opt_state = optimizer.init(params)
-
-    #             # Run the SGD loop for num_iterations 
-    #             for _ in range(num_iterations):
-
-    #                 # Store the log-likelihood history for each iteration
-    #                 if plot_history:
-    #                     all_results_log_likelihood.append(loss_fn(params, self.data))
-
-    #                 data_subset = self.data if batch_size is None else self.data.sample(batch_size)
-    #                 grads = grad_fn(params, data_subset)
-    #                 updates, opt_state = optimizer.update(grads, opt_state)
-    #                 params = optax.apply_updates(params, updates)
-
-    #             # Plot the log-likelihood history using the function defined above
-    #             if plot_history:
-    #                 _plot_log_likelihood_history(all_results_log_likelihood)
-
-    #             # Ensure that alpha is within [-π, π]
-    #             params["alpha"] = (params["alpha"] + jnp.pi) % (2 * jnp.pi) - jnp.pi
-
-    #             # Convert from minimised negative log-likelihood to log-likelihood (maximised)
-    #             final_log_likelihood = -loss_fn(params, self.data)
-
-    #             # Store the final parameter estimates and log-likelihood
-    #             all_results.append({"params": params, "log_likelihood": final_log_likelihood})
-
-
-    #     # ------------------ Adam Optimizer ------------------
-
-    #     if sampling_type == 'Adam':
-
-    #         # Define the Adam optimizer and initialize it with the learning rate
-    #         optimizer = optax.adam(learning_rate)
-
-    #         # Loop over all num_samples and optimize each one
-    #         for i in tqdm(range(num_samples), desc="Optimizing MLE using Adam:", leave=True):
-
-    #             # Extract the parameters for the current sample from the dictionary - ensure they are jnp arrays
-    #             params = {k: jnp.array(v[i]) for k, v in prior_samples.items()}
-
-    #             # Initialise the optimizer state
-    #             opt_state = optimizer.init(params)
-
-    #             # Run the Adam optimization loop for num_iterations
-    #             for iteration in range(num_iterations):
-
-    #                 # Store the log-likelihood history for tracking
-    #                 if plot_history:
-    #                     all_results_log_likelihood.append(loss_fn(params, self.data))
-
-    #                 # Sample mini-batch if batch_size is set
-    #                 data_subset = self.data if batch_size is None else self.data.sample(batch_size)
-    #                 grads = grad_fn(params, data_subset)
-    #                 updates, opt_state = optimizer.update(grads, opt_state)
-    #                 params = optax.apply_updates(params, updates)
-
-    #             # Plot the log-likelihood history if enabled
-    #             if plot_history:
-    #                 _plot_log_likelihood_history(all_results_log_likelihood)
-
-    #             # Ensure that alpha is within [-π, π]
-    #             params["alpha"] = (params["alpha"] + jnp.pi) % (2 * jnp.pi) - jnp.pi
-
-    #             # Convert from minimized negative log-likelihood to log-likelihood (maximized)
-    #             final_log_likelihood = -loss_fn(params, self.data)
-
-    #             # Store the final parameter estimates and log-likelihood
-    #             all_results.append({"params": params, "log_likelihood": final_log_likelihood})
-
-
-    #     # Apply a filter on all results that removed any unphysical values - ie N < 0 or r < 0
-    #     filtered_results = [entry for entry in all_results if entry["params"]["N"] > 0 and entry["params"]["r"] > 0]
-    #     num_removed = num_samples - len(filtered_results)
-    #     logging.info(f"Removed {num_removed}/{num_samples} MLE estimates due to unphysical values (N or r < 0).")
-    #     if not filtered_results:
-    #         raise RuntimeError("All estimated parameters were invalid. Consider adjusting priors.")
-        
-    #     # Find the best result based on maximum log-likelihood
-    #     best_result = max(filtered_results, key=lambda x: x["log_likelihood"])
-
-    #     # Report in a table the top 5 results - parameter values and the log_liklihood - note alpha, x0 and sigma are arrays
-
-
-    #     logging.info(f"Best MLE estimate from Gradient Descent found with log-likelihood = {best_result['log_likelihood']:.4f}")
-        
-    #     # ------------------ Use Minuit for further optimisation ------------------
-    #     logging.info(f"This will now be passed to Minuit for further optimisation with limits.")
-
-
-    #     # ------------------ Step 1: Extract Initial Parameters ------------------
-    #     N_current, r_current = best_result["params"]["N"], best_result["params"]["r"]
-    #     x0_current, y0_current, alpha_current = best_result["params"]["x0"], best_result["params"]["y0"], best_result["params"]["alpha"]
-    #     sigma_current = best_result["params"]["sigma"]
-
-    #     # ------------------ Step 2: Define Likelihood Function for `iminuit` ------------------
-
-    #     #### THIS IS REALLY MESSY - BUT HAS TO MEET IMINIUTS STRICT REQUIREMENTS ####
-
-    #     # Isotropic Model - Sigma is a single value
-    #     if self.model_type == "isotropic":
-
-    #         # No Filtering
-    #         if self.num_sections == 8:
-    #             def neg_log_likelihood(N, r, x0_1, x0_2, x0_3, x0_4, x0_5, x0_6, x0_7, x0_8, y0_1, y0_2, y0_3, y0_4, y0_5, y0_6, y0_7, y0_8, alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, alpha_7, alpha_8, sigma):
-    #                 # Compute negative log-likelihood
-    #                 x0_repacked = jnp.array([x0_1, x0_2, x0_3, x0_4, x0_5, x0_6, x0_7, x0_8])
-    #                 y0_repacked = jnp.array([y0_1, y0_2, y0_3, y0_4, y0_5, y0_6, y0_7, y0_8])
-    #                 alpha_repacked = jnp.array([alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, alpha_7, alpha_8])
-
-    #                 return self.likelihood(N, r, x0_repacked, y0_repacked, alpha_repacked, sigma, log=True, neg=True, data=None)
-
-    #             mi = Minuit(neg_log_likelihood, N=N_current, r_best=r_current, x0_1=x0_current[0], x0_2=x0_current[1], x0_3=x0_current[2], x0_4=x0_current[3], x0_5=x0_current[4], x0_6=x0_current[5], x0_7=x0_current[6], x0_8=x0_current[7],
-    #                         y0_1=y0_current[0], y0_2=y0_current[1], y0_3=y0_current[2], y0_4=y0_current[3], y0_5=y0_current[4], y0_6=y0_current[5], y0_7=y0_current[6], y0_8=y0_current[7],
-    #                         alpha_1=alpha_current[0], alpha_2=alpha_current[1], alpha_3=alpha_current[2], alpha_4=alpha_current[3], alpha_5=alpha_current[4], alpha_6=alpha_current[5], alpha_7=alpha_current[6], alpha_8=alpha_current[7], sigma=sigma_current)   
-                
-
-    #             mi.limits = {"N": (340, 370), "r": (65, 85), "x0_1": (75, 85), "x0_2": (75, 85), "x0_3": (75, 85), "x0_4": (75, 85), "x0_5": (75, 85), "x0_6": (75, 85), "x0_7": (75, 85), "x0_8": (75, 85),
-    #                         "y0_1": (130, 140), "y0_2": (130, 140), "y0_3": (130, 140), "y0_4": (130, 140), "y0_5": (130, 140), "y0_6": (130, 140), "y0_7": (130, 140), "y0_8": (130, 140),
-    #                         "alpha_1": (-3, -2), "alpha_2": (-3, -2), "alpha_3": (-3, -2), "alpha_4": (-3, -2), "alpha_5": (-3, -2), "alpha_6": (-3, -2), "alpha_7": (-3, -2), "alpha_8": (-3, -2),
-    #                         "sigma": (0, 5)}
-
-    #         # Basic Filtering
-    #         if self.num_sections == 6:
-    #             def neg_log_likelihood(N, r, x0_1, x0_2, x0_3, x0_4, x0_5, x0_6, y0_1, y0_2, y0_3, y0_4, y0_5, y0_6, alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, sigma):
-    #                 # Compute negative log-likelihood
-    #                 x0_repacked = jnp.array([x0_1, x0_2, x0_3, x0_4, x0_5, x0_6])
-    #                 y0_repacked = jnp.array([y0_1, y0_2, y0_3, y0_4, y0_5, y0_6])
-    #                 alpha_repacked = jnp.array([alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6])
-
-    #                 return self.likelihood(N, r, x0_repacked, y0_repacked, alpha_repacked, sigma, log=True, neg=True, data=None)
-                
-    #             mi = Minuit(neg_log_likelihood, N=N_current, r_best=r_current, x0_1=x0_current[0], x0_2=x0_current[1], x0_3=x0_current[2], x0_4=x0_current[3], x0_5=x0_current[4], x0_6=x0_current[5],
-    #                         y0_1=y0_current[0], y0_2=y0_current[1], y0_3=y0_current[2], y0_4=y0_current[3], y0_5=y0_current[4], y0_6=y0_current[5],
-    #                         alpha_1=alpha_current[0], alpha_2=alpha_current[1], alpha_3=alpha_current[2], alpha_4=alpha_current[3], alpha_5=alpha_current[4], alpha_6=alpha_current[5], sigma=sigma_current)
-                
-    #             mi.limits = {"N": (340, 370), "r": (65, 85), "x0_1": (75, 85), "x0_2": (75, 85), "x0_3": (75, 85), "x0_4": (75, 85), "x0_5": (75, 85), "x0_6": (75, 85), 
-    #                         "y0_1": (130, 140), "y0_2": (130, 140), "y0_3": (130, 140), "y0_4": (130, 140), "y0_5": (130, 140), "y0_6": (130, 140), "alpha_1": (-3, -2), 
-    #                         "alpha_2": (-3, -2), "alpha_3": (-3, -2), "alpha_4": (-3, -2), "alpha_5": (-3, -2), "alpha_6": (-3, -2), "sigma": (0, 5)}
-              
-    #         elif self.num_sections == 4:
-    #             def neg_log_likelihood(N, r, x0_1, x0_2, x0_3, x0_4, y0_1, y0_2, y0_3, y0_4, alpha_1, alpha_2, alpha_3, alpha_4, sigma):
-    #                 # Compute negative log-likelihood
-    #                 x0_repacked = jnp.array([x0_1, x0_2, x0_3, x0_4])
-    #                 y0_repacked = jnp.array([y0_1, y0_2, y0_3, y0_4])
-    #                 alpha_repacked = jnp.array([alpha_1, alpha_2, alpha_3, alpha_4])
-
-    #                 return self.likelihood(N, r, x0_repacked, y0_repacked, alpha_repacked, sigma, log=True, neg=True, data=None)
-
-    #             mi = Minuit(neg_log_likelihood, N=N_current, r_best=r_current, x0_1=x0_current[0], x0_2=x0_current[1], x0_3=x0_current[2], x0_4=x0_current[3],
-    #                         y0_1=y0_current[0], y0_2=y0_current[1], y0_3=y0_current[2], y0_4=y0_current[3],
-    #                         alpha_1=alpha_current[0], alpha_2=alpha_current[1], alpha_3=alpha_current[2], alpha_4=alpha_current[3], sigma=sigma_current)
-                
-    #             mi.limits = {"N": (340, 370), "r": (65, 85), "x0_1": (75, 85), "x0_2": (75, 85), "x0_3": (75, 85), "x0_4": (75, 85),
-    #                 "y0_1": (130, 140), "y0_2": (130, 140), "y0_3": (130, 140), "y0_4": (130, 140), "alpha_1": (-3, -2), "alpha_2": (-3, -2), 
-    #                 "alpha_3": (-3, -2), "alpha_4": (-3, -2), "sigma": (0, 5)}
-                
-
-    #     # Anistropic Model - Sigma is an array
-    #     elif self.model_type == "anisotropic":
-
-    #         # No Filtering (num_sections = 8)
-    #         if self.num_sections == 8:
-    #             def neg_log_likelihood(N, r, 
-    #                                 x0_1, x0_2, x0_3, x0_4, x0_5, x0_6, x0_7, x0_8, 
-    #                                 y0_1, y0_2, y0_3, y0_4, y0_5, y0_6, y0_7, y0_8, 
-    #                                 alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, alpha_7, alpha_8, 
-    #                                 sigma_r, sigma_t):
-    #                 """
-    #                 Negative log-likelihood function for anisotropic model (8 sections).
-    #                 """
-    #                 x0_repacked = jnp.array([x0_1, x0_2, x0_3, x0_4, x0_5, x0_6, x0_7, x0_8])
-    #                 y0_repacked = jnp.array([y0_1, y0_2, y0_3, y0_4, y0_5, y0_6, y0_7, y0_8])
-    #                 alpha_repacked = jnp.array([alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, alpha_7, alpha_8])
-    #                 sigma_repacked = jnp.array([sigma_r, sigma_t])  # Two sigma values
-
-    #                 return self.likelihood(N, r, x0_repacked, y0_repacked, alpha_repacked, sigma_repacked, log=True, neg=True, data=None)
-                
-
-    #             # Initialize Minuit with explicit parameters
-    #             mi = Minuit(
-    #                 neg_log_likelihood, 
-    #                 N=N_current, r=r_current,
-    #                 x0_1=x0_current[0], x0_2=x0_current[1], x0_3=x0_current[2], x0_4=x0_current[3], 
-    #                 x0_5=x0_current[4], x0_6=x0_current[5], x0_7=x0_current[6], x0_8=x0_current[7],
-    #                 y0_1=y0_current[0], y0_2=y0_current[1], y0_3=y0_current[2], y0_4=y0_current[3], 
-    #                 y0_5=y0_current[4], y0_6=y0_current[5], y0_7=y0_current[6], y0_8=y0_current[7],
-    #                 alpha_1=alpha_current[0], alpha_2=alpha_current[1], alpha_3=alpha_current[2], alpha_4=alpha_current[3], 
-    #                 alpha_5=alpha_current[4], alpha_6=alpha_current[5], alpha_7=alpha_current[6], alpha_8=alpha_current[7],
-    #                 sigma_r=sigma_current[0], sigma_t=sigma_current[1]  # Two sigma values
-    #             )
-
-    #             mi.limits = {"N": (340, 370), "r": (65, 85), "x0_1": (75, 85), "x0_2": (75, 85), "x0_3": (75, 85), "x0_4": (75, 85), "x0_5": (75, 85), "x0_6": (75, 85), "x0_7": (75, 85), "x0_8": (75, 85),
-    #                         "y0_1": (130, 140), "y0_2": (130, 140), "y0_3": (130, 140), "y0_4": (130, 140), "y0_5": (130, 140), "y0_6": (130, 140), "y0_7": (130, 140), "y0_8": (130, 140),
-    #                         "alpha_1": (-3, -2), "alpha_2": (-3, -2), "alpha_3": (-3, -2), "alpha_4": (-3, -2), "alpha_5": (-3, -2), "alpha_6": (-3, -2), "alpha_7": (-3, -2), "alpha_8": (-3, -2),
-    #                         "sigma_r": (0, 5), "sigma_t": (0, 5)}
-                                        
-    #         # Filtering Case (num_sections = 6)
-    #         elif self.num_sections == 6:
-    #             def neg_log_likelihood(N, r, 
-    #                                 x0_1, x0_2, x0_3, x0_4, x0_5, x0_6, 
-    #                                 y0_1, y0_2, y0_3, y0_4, y0_5, y0_6, 
-    #                                 alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, 
-    #                                 sigma_r, sigma_t):
-    #                 """
-    #                 Negative log-likelihood function for anisotropic model with 6 sections.
-    #                 """
-    #                 x0_repacked = jnp.array([x0_1, x0_2, x0_3, x0_4, x0_5, x0_6])
-    #                 y0_repacked = jnp.array([y0_1, y0_2, y0_3, y0_4, y0_5, y0_6])
-    #                 alpha_repacked = jnp.array([alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6])
-    #                 sigma_repacked = jnp.array([sigma_r, sigma_t])
-
-    #                 return self.likelihood(N, r, x0_repacked, y0_repacked, alpha_repacked, sigma_repacked, log=True, neg=True, data=None)
-
-    #             # Initialize Minuit
-    #             mi = Minuit(
-    #                 neg_log_likelihood, 
-    #                 N=N_current, r=r_current,
-    #                 x0_1=x0_current[0], x0_2=x0_current[1], x0_3=x0_current[2], x0_4=x0_current[3], x0_5=x0_current[4], x0_6=x0_current[5],
-    #                 y0_1=y0_current[0], y0_2=y0_current[1], y0_3=y0_current[2], y0_4=y0_current[3], y0_5=y0_current[4], y0_6=y0_current[5],
-    #                 alpha_1=alpha_current[0], alpha_2=alpha_current[1], alpha_3=alpha_current[2], alpha_4=alpha_current[3], alpha_5=alpha_current[4], alpha_6=alpha_current[5],
-    #                 sigma_r=sigma_current[0], sigma_t=sigma_current[1]  # Two sigma values
-    #             )
-
-    #             mi.limits = {"N": (340, 370), "r": (65, 85), "x0_1": (75, 85), "x0_2": (75, 85), "x0_3": (75, 85), "x0_4": (75, 85), "x0_5": (75, 85), "x0_6": (75, 85), 
-    #                             "y0_1": (130, 140), "y0_2": (130, 140), "y0_3": (130, 140), "y0_4": (130, 140), "y0_5": (130, 140), "y0_6": (130, 140), "alpha_1": (-3, -2), 
-    #                             "alpha_2": (-3, -2), "alpha_3": (-3, -2), "alpha_4": (-3, -2), "alpha_5": (-3, -2), "alpha_6": (-3, -2), "sigma_r": (0, 5), "sigma_t": (0, 5)}
-
-    #         # Filtering Case (num_sections = 4)
-    #         elif self.num_sections == 4:
-    #             def neg_log_likelihood(N, r, 
-    #                                 x0_1, x0_2, x0_3, x0_4, 
-    #                                 y0_1, y0_2, y0_3, y0_4, 
-    #                                 alpha_1, alpha_2, alpha_3, alpha_4, 
-    #                                 sigma_r, sigma_t):
-    #                 """
-    #                 Negative log-likelihood function for anisotropic model with 4 sections.
-    #                 """
-    #                 x0_repacked = jnp.array([x0_1, x0_2, x0_3, x0_4])
-    #                 y0_repacked = jnp.array([y0_1, y0_2, y0_3, y0_4])
-    #                 alpha_repacked = jnp.array([alpha_1, alpha_2, alpha_3, alpha_4])
-    #                 sigma_repacked = jnp.array([sigma_r, sigma_t])
-
-    #                 return self.likelihood(N, r, x0_repacked, y0_repacked, alpha_repacked, sigma_repacked, log=True, neg=True, data=None)
-
-    #             mi = Minuit(
-    #                 neg_log_likelihood, 
-    #                 N=N_current, r=r_current,
-    #                 x0_1=x0_current[0], x0_2=x0_current[1], x0_3=x0_current[2], x0_4=x0_current[3],
-    #                 y0_1=y0_current[0], y0_2=y0_current[1], y0_3=y0_current[2], y0_4=y0_current[3],
-    #                 alpha_1=alpha_current[0], alpha_2=alpha_current[1], alpha_3=alpha_current[2], alpha_4=alpha_current[3],
-    #                 sigma_r=sigma_current[0], sigma_t=sigma_current[1]  # Two sigma values
-    #             )
-
-    #             mi.limits = {"N": (340, 370), "r": (65, 85), "x0_1": (75, 85), "x0_2": (75, 85), "x0_3": (75, 85), "x0_4": (75, 85),
-    #                 "y0_1": (130, 140), "y0_2": (130, 140), "y0_3": (130, 140), "y0_4": (130, 140), "alpha_1": (-3, -2), "alpha_2": (-3, -2), 
-    #                 "alpha_3": (-3, -2), "alpha_4": (-3, -2), "sigma_r": (0, 5), "sigma_t": (0, 5)}
-
-    #     # ------------------ Step 4: Run `iminuit` Optimisation ------------------
-
-    #     mi.migrad(ncall = 5)
-
-    #     # ------------------ Step 5: Extract Refined Parameters ------------------
-
-    #     refined_params = mi.values.to_dict()
-    #     param_errors = mi.errors.to_dict()
-
-    #     # Split into individual components
-    #     refined_x0 = np.array([refined_params[f"x0_{i}"] for i in range(self.num_sections)])
-    #     refined_y0 = np.array([refined_params[f"y0_{i}"] for i in range(self.num_sections)])
-    #     refined_alpha = np.array([refined_params[f"alpha_{i}"] for i in range(self.num_sections)])
-    #     if self.model_type == "isotropic":
-    #         refined_sigma = refined_params["sigma"]
-    #     elif self.model_type == "anisotropic":
-    #         refined_sigma = np.array([refined_params["sigma_r"], refined_params["sigma_t"]])
-
-    #     # ------------------ Step 6: Store Results ------------------
-    #     final_results = {
-    #         "N": refined_params["N_best"],
-    #         "r": refined_params["r_best"],
-    #         "x0": refined_x0,
-    #         "y0": refined_y0,
-    #         "alpha": refined_alpha,
-    #         "sigma": refined_sigma,
-    #         "errors": param_errors
-    #     }
-
-    #     print(mi)
-
-    #     return final_results
-
-
-
-    # # ------------------ Analyse MLE Results ------------------
-
-    # def _analyse_mle_results(self, mle_results):
-    #     """
-    #     Analyse the results of Maximum Likelihood Estimation (MLE).
-
-    #     This function provides **diagnostics and visualizations** for the estimated parameters obtained 
-    #     through MLE. The analysis includes:
-
-    #     1. **Identifying the best log-likelihood estimate**.
-    #     2. **Computing gradients at the best estimates** (useful for convergence diagnostics).
-    #     3. **Extracting the top 20% highest log-likelihoods** for further analysis.
-    #     4. **Visualizing parameter distributions** with histograms.
-    #     5. **Plotting log-likelihood and gradient magnitude distributions**.
-
-    #     ---
-    #     **Parameters**
-    #     ----------
-    #     mle_results : list of dict
-    #         Each dictionary contains:
-    #         - `"params"` : A dictionary of estimated parameters.
-    #         - `"log_likelihood"` : The corresponding log-likelihood value.
-
-    #     ---
-    #     **Returns**
-    #     -------
-    #     None
-    #         - Displays multiple histograms of parameter distributions.
-    #         - Logs the best MLE estimates and gradient magnitudes.
-    #     """
-
-    #     if not mle_results:
-    #         raise ValueError("No MLE results provided for analysis.")
-
-    #     # Convert results into structured format
-    #     log_likelihoods = np.array([entry["log_likelihood"] for entry in mle_results])
-
-    #     # Separate scalar parameters from vector parameters
-    #     param_dict = {}
-    #     for key in mle_results[0]["params"]:
-    #         values = np.array([entry["params"][key] for entry in mle_results])
-
-    #         # If the parameter is a vector (e.g., x0, y0, alpha), split into components
-    #         if values.ndim > 1:
-    #             for i in range(values.shape[1]):
-    #                 param_dict[f"{key}_{i+1}"] = values[:, i]
-    #         else:
-    #             param_dict[key] = values
-
-    #     # ------------------ Best Log-Likelihood and Gradients ------------------
-
-    #     # Find the best MLE estimate
-    #     best_idx = np.argmax(log_likelihoods)
-    #     best_params = mle_results[best_idx]["params"]
-    #     best_log_likelihood = log_likelihoods[best_idx]
-
-    #     logging.info(f"Best MLE estimate found at index {best_idx} with log-likelihood = {best_log_likelihood:.4f}")
-
-    #     # Compute gradient at best estimate (if gradient function is available)
-    #     try:
-    #         best_gradient = self.analytic_grad_loglikelihood(**best_params, data=self.data)
-    #         gradient_values = np.concatenate([v.flatten() for v in best_gradient.values()])
-    #         gradient_values_mag = np.linalg.norm(gradient_values)
-    #         logging.info(f"Gradient at best MLE estimate found to be magnitude: {gradient_values_mag:.4f}")
-
-    #     except Exception as e:
-    #         best_gradient = None
-    #         logging.info("Gradient computation failed:", e)
-
-
-    #     # ------------------ Top 20% of Log-Likelihoods ------------------
-    #     cutoff = np.percentile(log_likelihoods, 80)  # Find 80th percentile threshold
-    #     top_20_mask = log_likelihoods >= cutoff  # Selects the least negative log-likelihoods (best fits)
-        
-    #     # Store the top 20% of parameters
-    #     top_20_params = {key: values[top_20_mask] for key, values in param_dict.items()}
-    #     top_20_log_likelihoods = log_likelihoods[top_20_mask]
-
-    #     logging.info(f"Top 20% of best log-likelihoods have values above {cutoff:.4f}")
-
-    #     # ------------------ Compute Gradient Magnitudes for Top 20% ------------------
-
-    #     gradient_magnitudes = []
-    #     for i, entry in enumerate(mle_results):
-    #         if top_20_mask[i]:  # Only compute for top 20% subset
-    #             try:
-    #                 gradient = self.analytic_grad_loglikelihood(**entry["params"], data=self.data)
-    #                 grad_vector = np.concatenate([v.flatten() for v in gradient.values()])  # Flatten to vector
-    #                 grad_magnitude = np.linalg.norm(grad_vector)  # Compute L2 norm
-    #                 gradient_magnitudes.append(grad_magnitude)
-    #             except Exception as e:
-    #                 logging.warning(f"Skipping gradient for sample {i}: {e}")
-
-    #     gradient_magnitudes = np.array(gradient_magnitudes)  # Convert to NumPy array for plotting
-
-    #     # ------------------ Plots: Filtered Log-Likelihood Distribution ------------------
-
-    #     plt.figure(figsize=(8, 6), dpi=300)
-    #     sns.histplot(top_20_log_likelihoods, bins=15, kde=True, color="darkblue")
-    #     plt.xlabel("Log-Likelihood", fontsize=14)
-    #     plt.ylabel("Frequency", fontsize=14)
-    #     plt.title("Distribution of Log-Likelihoods (Top 20%)", fontsize=16, fontweight="bold")
-    #     plt.grid(True, linestyle="--", alpha=0.6)
-    #     plt.show()
-
-    #     # ------------------ Plots: Gradient Magnitude Distribution ------------------
-
-    #     if len(gradient_magnitudes) > 0:
-    #         plt.figure(figsize=(8, 6), dpi=300)
-    #         sns.histplot(gradient_magnitudes, bins=20, kde=True, color="purple")
-    #         plt.xlabel("Gradient Magnitude", fontsize=14)
-    #         plt.ylabel("Frequency", fontsize=14)
-    #         plt.title("Gradient Magnitude Distribution (Top 20%)", fontsize=16, fontweight="bold")
-    #         plt.grid(True, linestyle="--", alpha=0.6)
-    #         plt.show()
-    #     else:
-    #         logging.info("Skipping gradient magnitude plot: No valid gradients found.")
-
-    #     # ------------------ Plots: Parameter Distributions ------------------
-
-    #     num_params = len(top_20_params)
-    #     fig, axes = plt.subplots(nrows=num_params, figsize=(8, 3 * num_params), dpi=300)
-
-    #     if num_params == 1:
-    #         axes = [axes]  # Ensure it's iterable
-
-    #     for ax, (param, values) in zip(axes, top_20_params.items()):
-    #         sns.histplot(values.flatten(), ax=ax, kde=True, bins=30, color="green")
-    #         ax.set_title(f"Distribution of {param} (Top 20%)", fontsize=14, fontweight="bold")
-    #         ax.set_xlabel(param, fontsize=12)
-    #         ax.set_ylabel("Frequency", fontsize=12)
-    #         ax.grid(True, linestyle="--", alpha=0.6)
-    #     plt.tight_layout()
-    #     plt.show()
-
-    #     # ------------------ Display Summary Table ------------------
-
-    #     return None
