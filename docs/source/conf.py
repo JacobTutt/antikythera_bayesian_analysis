@@ -24,13 +24,14 @@ extensions = [
     'sphinx.ext.mathjax', 
 ]
 
-# Autodoc configuration
 autodoc_default_options = {
-    'members': True,             # Include all members (functions, classes, etc.)
+    'members': True,             # Include all public members
     'undoc-members': True,       # Include members without docstrings
-    'private-members': True,     # Include private members (_name)
-    'special-members': '__init__',  # Include special methods (e.g., __init__)
+    'private-members': True,     # Include members starting with _
+    'special-members': '__init__',  # Include special methods (like __init__)
     'show-inheritance': True,    # Show class inheritance
+    'alphabetical': False,       # To maintain source order (optional)
+    'member-order': 'bysource',  # To maintain source order (optional)
 }
 autodoc_mock_imports = [
     "numpy",

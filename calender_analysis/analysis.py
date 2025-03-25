@@ -49,7 +49,7 @@ logging.basicConfig(level=logging.INFO,  format="%(asctime)s - %(levelname)s - %
 
 class Calender_Analysis:
     def __init__(self, data, model_type="anisotropic", filtering = 'None', priors=None, num_cores = 4):
-        """
+        r"""
         Initializes the Bayesian model for analyzing hole positions on a fragmented calendar ring.
 
         This class models the hole positions using a probabilistic framework, supporting different
@@ -160,7 +160,7 @@ class Calender_Analysis:
 
     
     def _load_data(self, data, filtering=False):
-        """
+        r"""
         Loads, validates, and optionally filters the hole position data.
 
         This method ensures the data is correctly formatted and sorted by hole number.
@@ -284,7 +284,7 @@ class Calender_Analysis:
         
     
     def plot_hole_locations(self, figsize=(10, 8)):
-        """
+        r"""
         Plots the measured hole locations in the x-y plane, color-coded by section ID.
 
         This function provides a visualization of hole positions (`Mean(X)`, `Mean(Y)`) from the dataset.
@@ -410,7 +410,7 @@ class Calender_Analysis:
         plt.show()
 
     def hole_positions(self, N, r, x0, y0, alpha, section_ids=None, hole_nos=None):
-        """
+        r"""
         Computes the expected positions of holes on the calendar ring based on model parameters.
 
         This function calculates the predicted x and y coordinates of holes under the assumption that:
@@ -501,7 +501,7 @@ class Calender_Analysis:
         return hole_posn_model
 
     def likelihood(self, N, r, x0, y0, alpha, sigma, log=False, neg = False, data = None):
-        """
+        r"""
         Computes the likelihood (or log-likelihood) of the observed hole positions given model parameters.
 
         This function evaluates how well the observed hole positions match the expected positions
@@ -516,14 +516,12 @@ class Calender_Analysis:
         - **Isotropic Model**:
 
         .. math::
-            \log L = -\frac{1}{2} \sum_i \left(\frac{(e_{i,x})^2 + (e_{i,y})^2}{\sigma^2} \right)
-            - n \log(2\pi\sigma)
+            \log L = -\frac{1}{2} \sum_i \left(\frac{(e_{i,x})^2 + (e_{i,y})^2}{\sigma^2} \right)- n \log(2\pi\sigma)
 
         - **Anisotropic Model**:
 
         .. math::
-            \log L = -\frac{1}{2} \sum_i \left( \frac{(e_{i,r})^2}{\sigma_r^2} + \frac{(e_{i,t})^2}{\sigma_t^2} \right)
-            - n \log(2\pi\sigma_r\sigma_t)
+            \log L = -\frac{1}{2} \sum_i \left( \frac{(e_{i,r})^2}{\sigma_r^2} + \frac{(e_{i,t})^2}{\sigma_t^2} \right) - n \log(2\pi\sigma_r\sigma_t)
 
         where:
 
@@ -666,7 +664,7 @@ class Calender_Analysis:
         
         
     def grad_likelihood(self, N, r, x0, y0, alpha, sigma, log=True, neg = False, data = None):
-        """
+        r"""
         Computes the gradients of the likelihood or log-likelihood using automatic differentiation.
 
         This function leverages **JAX's automatic differentiation (`jax.grad`)** to compute the gradients
@@ -753,11 +751,13 @@ class Calender_Analysis:
         - **Isotropic Gaussian Model** (single `sigma` for x and y errors):
 
           .. math::
+
              \log L = -\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left( e_{x,i}^2 + e_{y,i}^2 \right) - n \log(2\pi \sigma)
 
         - **Anisotropic Gaussian Model** (separate `sigma_r`, `sigma_t` for radial and tangential errors):
 
           .. math::
+
              \log L = -\frac{1}{2} \sum_{i=1}^{n} \left( \frac{e_{r,i}^2}{\sigma_r^2} + \frac{e_{t,i}^2}{\sigma_t^2} \right) - n \log(2\pi \sigma_r \sigma_t)
 
         Parameters
@@ -973,7 +973,7 @@ class Calender_Analysis:
 
     
     def compare_performance_grad(self, N, r, x0, y0, alpha, sigma, neg = False, tolerance=1e-2, num_runs=100, subset_size = 40, return_results=False):
-        """
+        r"""
         Compare performance and numerical accuracy between automatic and analytical gradient computations.
 
         This function benchmarks the execution time, memory usage, and numerical agreement between:
@@ -1170,7 +1170,7 @@ class Calender_Analysis:
     # ------------------ Independent Sampling from Priors ------------------
 
     def sample_from_priors(self, key, num_samples=100):
-        """
+        r"""
         Generate samples from the prior distributions of model parameters.
 
         This function uses **NumPyro's sampling utilities** to draw `num_samples` realisations from 
@@ -1232,7 +1232,7 @@ class Calender_Analysis:
     # ------------------ Maximum Likelihood Estimation (MLE) ------------------
 
     def max_likelihood_est(self, sampling_type, num_samples=1000, num_iterations=500, learning_rate=0.01, batch_size=None, key=None, derivative='analytic', plot_history=False, summary_table = None, save_path = None):
-        """
+        r"""
         Perform Maximum Likelihood Estimation (MLE) using stochastic optimization methods.
 
         Supported methods:
@@ -1693,7 +1693,7 @@ class Calender_Analysis:
     
 
     def numpryo_model(self):
-        """
+        r"""
         Defines the model and the likelihood function for Bayesian inference using NumPyro.
 
         The function infers the following parameters:
@@ -1714,8 +1714,7 @@ class Calender_Analysis:
         - **Anisotropic Gaussian:**
 
           .. math::
-             p(\{d_i\} | \mathbf{a}) = (2\pi\sigma_r\sigma_t)^{-n} \prod_{j=0}^{s-1} \prod_{i \in j}
-             \exp \left[ -\frac{(e_{ij} \cdot \hat{r}_{ij})^2}{2\sigma_r^2} - \frac{(e_{ij} \cdot \hat{t}_{ij})^2}{2\sigma_t^2} \right]
+             p(\{d_i\} | \mathbf{a}) = (2\pi\sigma_r\sigma_t)^{-n} \prod_{j=0}^{s-1} \prod_{i \in j} \exp \left[ -\frac{(e_{ij} \cdot \hat{r}_{ij})^2}{2\sigma_r^2} - \frac{(e_{ij} \cdot \hat{t}_{ij})^2}{2\sigma_t^2} \right]
 
         The choice between isotropic and anisotropic models is determined by `self.model_type`.
 
@@ -2584,7 +2583,7 @@ class Calender_Analysis:
         return log_likelihood
 
     def run_nested_sampling(self, num_live=500, max_iter=1000, tol=1e-3, seed=0, save_path = None):
-        """
+        r"""
         Implements a custom Nested Sampling algorithm that stores the necessary
         quantities for plotting and evidence estimation. This implementation
         operates in log-space to prevent numerical underflow when computing
@@ -2773,7 +2772,7 @@ class Calender_Analysis:
         return results_dict
 
     def plot_nested_sampling(self, nested_sampling_results):
-        """
+        r"""
         Generates plots for Nested Sampling results to assess convergence and sampling behavior.
 
         **Generated Plots**
@@ -2871,7 +2870,7 @@ class Calender_Analysis:
 
     
     def savage_dickey_comparison(self, best_params, burnin_period=2000, n_samples_posterior=10000, n_samples_prior=10000, random_seed=0, show_plots=True, random_key=None):
-        """
+        r"""
         Performs the Savage-Dickey density ratio test for comparing nested models.
 
         This method estimates the posterior and prior probability densities conditioned at
