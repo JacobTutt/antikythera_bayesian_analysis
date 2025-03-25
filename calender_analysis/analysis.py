@@ -2892,6 +2892,7 @@ class Calender_Analysis:
              - :math:`P_{\text{posterior}}(\sigma_t \approx \sigma_r)`
              - :math:`P_{\text{prior}}(\sigma_t \approx \sigma_r)`
            - Computes the **Savage-Dickey ratio**:
+
              .. math::
                 R_{SD} = \frac{P_{\text{posterior}}(X \approx 0)}{P_{\text{prior}}(X \approx 0)}
 
