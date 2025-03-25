@@ -671,11 +671,15 @@ class Calender_Analysis:
         of the **likelihood** or **log-likelihood** with respect to all model parameters.
 
         - If `log=True`, computes gradients of **log-likelihood**:
+
           .. math::
              \frac{\partial \log L}{\partial \theta}
+
         - If `log=False`, computes gradients of **likelihood**:
+
           .. math::
              \frac{\partial L}{\partial \theta}
+
         - If `neg=True`, returns **negative gradients** for optimization (minimization of negative log-likelihood).
 
         Parameters
@@ -738,7 +742,7 @@ class Calender_Analysis:
         return grad_dict
     
     def analytic_grad_loglikelihood(self, N, r, x0, y0, alpha, sigma, neg = False, data = None):
-        """
+        r"""
         Computes the **analytical gradients** of the log-likelihood function.
 
         This function explicitly derives the **partial derivatives** of the **log-likelihood** function
@@ -746,7 +750,6 @@ class Calender_Analysis:
         than automatic differentiation (e.g., `jax.grad`).
 
         **Log-likelihood expressions**
-        -----------------------------
 
         - **Isotropic Gaussian Model** (single `sigma` for x and y errors):
 
@@ -985,7 +988,7 @@ class Calender_Analysis:
         the **average execution time, peak memory usage, and gradient agreement** are reported.
 
         **Key Metrics Measured**
-        ----------------------
+
         - **Execution time** (seconds)
         - **Peak memory usage** (kilobytes)
         - **Numerical accuracy** (maximum absolute deviation between gradients)
@@ -1180,16 +1183,14 @@ class Calender_Analysis:
         - **Isotropic model**: A single standard deviation `sigma` is sampled.
         - **Anisotropic model**: Independent `sigma_r` and `sigma_t` values are sampled.
 
-        ---
-        **Parameters**
+        Parameters
         ----------
         key : jax.random.PRNGKey
             Random key for JAX-based sampling, ensuring reproducibility.
         num_samples : int, optional, default=100
             Number of parameter samples to generate.
 
-        ---
-        **Returns**
+        Returns
         -------
         dict
             A dictionary where:
@@ -1240,8 +1241,8 @@ class Calender_Analysis:
         - Adam Optimizer
         - BFGS (Limited-memory Broyden–Fletcher–Goldfarb–Shanno algorithm)
 
-        Recommended Hyperparameters for Each Method:
-        -----------------------------------------------------
+        **Recommended Hyperparameters for Each Method:**
+
         - **SGD (Stochastic Gradient Descent)**
           - `learning_rate`: **0.01 - 0.1** (Recommended: **0.01**)
           - `num_iterations`: **500 - 5000** (Recommended: **1000**)
@@ -2122,7 +2123,6 @@ class Calender_Analysis:
         Performs analysis on posterior samples, including summary statistics and corner plots.
 
         **Features**
-        ----------
         - **Summary Table:** Computes detailed summary statistics for posterior parameters, including:
           - Median and standard deviation.
           - 68%, 90%, 95%, and 99% credible intervals.
@@ -2273,8 +2273,7 @@ class Calender_Analysis:
         This function extracts posterior samples for a specified parameter and visualizes its 
         distribution across various credible interval levels.
 
-        ---
-        **Parameters**
+        Parameters
         ----------
         posterior_data : arviz.InferenceData or str
             The MCMC posterior samples (or path to a NetCDF file).
@@ -2283,14 +2282,12 @@ class Calender_Analysis:
         percentiles_range : tuple, optional, default=(50, 100)
             The percentile range (e.g., `(50, 100)`) over which to compute credible intervals.
 
-        ---
-        **Returns**
+        Returns
         -------
         None
             Displays a plot of credible intervals.
 
-        ---
-        **Notes**
+        Notes
         --------
         - Uses **thinned posterior samples** if available for better efficiency.
         - The plot **shades the full credible interval region**, with upper and lower bounds shown.
@@ -2590,7 +2587,7 @@ class Calender_Analysis:
         Bayesian evidence.
 
         **Mathematical Background**
-        --------------------------
+
         Nested Sampling iteratively removes the worst live point (lowest likelihood)
         and replaces it with a new sample from the constrained prior.
 
@@ -2614,7 +2611,7 @@ class Calender_Analysis:
             - :math:`L_i` are the likelihood values of removed (dead) points.
 
         **Log-space Transformation**
-        --------------------------
+
         Since the weights :math:`w_i` and likelihoods :math:`L_i` can be **very small**,
         we work in log-space:
 
@@ -2627,7 +2624,7 @@ class Calender_Analysis:
                 \log Z_{\text{new}} = \text{logaddexp}(\log Z, \log L_{\text{dead}} + \log X)
 
         **Uncertainty Estimation**
-        -------------------------
+
         The uncertainty in log-evidence is approximated as:
 
             .. math::
@@ -2776,7 +2773,7 @@ class Calender_Analysis:
         Generates plots for Nested Sampling results to assess convergence and sampling behavior.
 
         **Generated Plots**
-        -------------------
+
         1. **Log-Evidence (logZ) Convergence Plot:**
            - Tracks the evolution of the estimated log-evidence (`logZ`) over iterations.
 
@@ -2877,7 +2874,7 @@ class Calender_Analysis:
         `sigma_t = sigma_r` to compute the Savage-Dickey ratio.
 
         **Method Overview**
-        -------------------
+
         1. **Posterior Sampling:**
            - Runs an optimized **HMC MCMC chain** to draw posterior samples.
            - Extracts the **posterior samples** for `sigma_t` and `sigma_r`.
