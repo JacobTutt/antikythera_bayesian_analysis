@@ -2,6 +2,13 @@
 This repository contains the package, its documentation, and implementation required for the coursework.
 ---
 
+## Documentation for the project
+
+[Documentation on Read the Docs](https://coursework-s2.readthedocs.io/en/latest/Calender_Analysis/index.html)
+
+The coursework uses a modular, inherited class-based structure, which is explained below, to make it adaptable to different probability distributions. As a result documentation has been created for easier understanding of each functions methods and implementation
+
+
 ## Outline of Implementation
 
 # mention filtering, model types and all implements in class automatically. 
@@ -47,27 +54,6 @@ Open the notebooks and select the created kernel (Python (S2 Coursework)) to run
 
 The coureworks PDF report can be found under the **Report** directory of the repository
 
-## Documentation for the Coursework
-
-[Documentation on Read the Docs](https://s1-coursework.readthedocs.io/en/latest/index.html)
-
-The coursework uses a modular, inherited class-based structure, which is explained below, to make it adaptable to different probability distributions. As a result documentation has been created for easier understanding of each functions methods and implementation
-
-### Key Features of the Documentation
-
-- **Class and Function References**: Includes detailed descriptions of all classes and functions used in the coursework.
-- **Source Code Links**: Direct links to the source code for easy review.
-- **Notebook Integration**: Hyperlinks throughout the notebooks provide direct access to relevant sections of the documentation.
-
-### Accessing the Documentation Locally
-If desired you can build and view the documentation locally
-```bash
-cd docs
-make html
-open build/html/index.html  # On macOS
-xdg-open build/html/index.html  # On Linux
-start build/html/index.html  # On Windows
-```
 
 ## Declaration of Use of Autogeneration Tools
 
