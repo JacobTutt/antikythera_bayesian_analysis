@@ -52,8 +52,8 @@ class Calender_Analysis:
         """
         Initializes the Bayesian model for analyzing hole positions on a fragmented calendar ring.
 
-        This class models the hole positions using a probabilistic framework, supporting different 
-        error models, prior distributions, and dataset filtering options. It also enables parallel 
+        This class models the hole positions using a probabilistic framework, supporting different
+        error models, prior distributions, and dataset filtering options. It also enables parallel
         MCMC sampling using JAX across multiple CPU cores.
 
         Parameters
@@ -79,11 +79,11 @@ class Calender_Analysis:
             - `"r"` (Ring radius, default: `Uniform(65, 85)`)
             - `"x0", "y0"` (Section-specific x and y offsets, default: `Normal(80, 5)`, `Normal(135, 5)`)
             - `"alpha"` (Angular offsets, default: `Normal(-2.5, 1)`)
-            - **Isotropic model:**  
-            - `"sigma"` (Shared error term, default: `Uniform(0, 5)`)
-            - **Anisotropic model:**  
-            - `"sigma_r"` (Radial error term, default: `Uniform(0, 5)`)
-            - `"sigma_t"` (Tangential error term, default: `Uniform(0, 5)`)
+            - **Isotropic model:**
+              - `"sigma"` (Shared error term, default: `Uniform(0, 5)`)
+            - **Anisotropic model:**
+              - `"sigma_r"` (Radial error term, default: `Uniform(0, 5)`)
+              - `"sigma_t"` (Tangential error term, default: `Uniform(0, 5)`)
             If any user-defined priors are provided, they override the defaults.
         num_cores : int, optional, default=4
             The number of CPU cores to use for parallel processing with JAX during MCMC sampling.
@@ -287,19 +287,19 @@ class Calender_Analysis:
         """
         Plots the measured hole locations in the x-y plane, color-coded by section ID.
 
-        This function provides a visualization of hole positions (`Mean(X)`, `Mean(Y)`) from the dataset. 
-        It uses color-coded markers for different sections, adds annotations for hole numbers at regular 
+        This function provides a visualization of hole positions (`Mean(X)`, `Mean(Y)`) from the dataset.
+        It uses color-coded markers for different sections, adds annotations for hole numbers at regular
         intervals, and marks section transitions with perpendicular bisecting lines.
 
-        Features:
-        ---------
+        Features
+        --------
         - **Color-coded markers**: Each section ID is assigned a unique color.
         - **Different marker styles**: Cycles through circle, square, and triangle markers.
         - **Annotations**: Labels every third hole with its hole number.
         - **Section transition markers**: Red dashed perpendicular bisecting lines indicate section changes.
         - **Multiple legends**:
-        - Section ID legend.
-        - Bisector legend listing splits with corresponding hole numbers.
+          - Section ID legend.
+          - Bisector legend listing splits with corresponding hole numbers.
 
         Parameters
         ----------
@@ -442,7 +442,7 @@ class Calender_Analysis:
         Returns
         -------
         jnp.ndarray
-            A 2D array of shape `(N_holes, 2)`, where each row contains the expected (x, y) position 
+            A 2D array of shape `(N_holes, 2)`, where each row contains the expected (x, y) position
             of a hole based on the model parameters.
 
         Raises
@@ -504,27 +504,26 @@ class Calender_Analysis:
         """
         Computes the likelihood (or log-likelihood) of the observed hole positions given model parameters.
 
-        This function evaluates how well the observed hole positions match the expected positions 
+        This function evaluates how well the observed hole positions match the expected positions
         under a Gaussian error model. It supports two types of likelihoods:
 
         - **Isotropic Gaussian**: A single standard deviation `sigma` applies to both x and y errors.
-        - **Anisotropic Gaussian**: Separate standard deviations `sigma_r` and `sigma_t` for radial 
-        and tangential errors.
+        - **Anisotropic Gaussian**: Separate standard deviations `sigma_r` and `sigma_t` for radial
+          and tangential errors.
 
         The likelihood is calculated as:
 
         - **Isotropic Model**:
 
         .. math::
-            \log L = -\frac{1}{2} \sum_i \left(\frac{(e_{i,x})^2 + (e_{i,y})^2}{\sigma^2} \right) 
+            \log L = -\frac{1}{2} \sum_i \left(\frac{(e_{i,x})^2 + (e_{i,y})^2}{\sigma^2} \right)
             - n \log(2\pi\sigma)
 
         - **Anisotropic Model**:
 
         .. math::
-
-        \log L = -\frac{1}{2} \sum_i \left( \frac{(e_{i,r})^2}{\sigma_r^2} + \frac{(e_{i,t})^2}{\sigma_t^2} \right)
-        - n \log(2\pi\sigma_r\sigma_t)
+            \log L = -\frac{1}{2} \sum_i \left( \frac{(e_{i,r})^2}{\sigma_r^2} + \frac{(e_{i,t})^2}{\sigma_t^2} \right)
+            - n \log(2\pi\sigma_r\sigma_t)
 
         where:
 
@@ -532,7 +531,7 @@ class Calender_Analysis:
         - :math:`e_{i,y} = y_{\text{obs},i} - y_{\text{model},i}` (y-coordinate error)
         - :math:`e_{i,r}` and :math:`e_{i,t}` are the radial and tangential errors.
 
-        If a subset of data (`data`) is provided, the likelihood is computed over only that subset. 
+        If a subset of data (`data`) is provided, the likelihood is computed over only that subset.
         This enables efficient **stochastic gradient descent (SGD)** or **mini-batch optimization**.
 
         Parameters
@@ -670,21 +669,18 @@ class Calender_Analysis:
         """
         Computes the gradients of the likelihood or log-likelihood using automatic differentiation.
 
-        This function leverages **JAX's automatic differentiation (`jax.grad`)** to compute the gradients 
-        of the **likelihood** or **log-likelihood** with respect to all model parameters. 
+        This function leverages **JAX's automatic differentiation (`jax.grad`)** to compute the gradients
+        of the **likelihood** or **log-likelihood** with respect to all model parameters.
 
-        - If `log=True`, computes gradients of **log-likelihood**:  
-          \[
-          \frac{\partial \log L}{\partial \theta}
-          \]
-        - If `log=False`, computes gradients of **likelihood**:  
-          \[
-          \frac{\partial L}{\partial \theta}
-          \]
+        - If `log=True`, computes gradients of **log-likelihood**:
+          .. math::
+             \frac{\partial \log L}{\partial \theta}
+        - If `log=False`, computes gradients of **likelihood**:
+          .. math::
+             \frac{\partial L}{\partial \theta}
         - If `neg=True`, returns **negative gradients** for optimization (minimization of negative log-likelihood).
 
-        ---
-        **Parameters**
+        Parameters
         ----------
         N : float
             Total number of holes in the original (pre-fragmented) calendar ring.
@@ -707,8 +703,7 @@ class Calender_Analysis:
         data : pd.DataFrame, optional, default=None
             A subset of the dataset for computing gradients. If `None`, uses the full dataset.
 
-        ---
-        **Returns**
+        Returns
         -------
         dict
             A dictionary containing gradients of the likelihood/log-likelihood with respect to each parameter:
@@ -719,14 +714,12 @@ class Calender_Analysis:
             - `"alpha"` : Gradients w.r.t. angular offsets (array of shape `num_sections`).
             - `"sigma"` : Gradient w.r.t. sigma (scalar for isotropic, array for anisotropic).
 
-        ---
-        **Notes**
-        --------
+        Notes
+        -----
         - Uses **JAX's automatic differentiation** (`jax.grad`) for gradient computation.
         - More efficient than finite-difference approximations but may be **less stable** than analytical gradients.
         - If `neg=True`, returns **negative gradients** for optimization-based approaches (e.g., gradient descent).
         """
-
         if neg and not log:
             raise ValueError("Negative is only valid when log is True - ie negetive log likelihood")
 
@@ -751,24 +744,23 @@ class Calender_Analysis:
         Computes the **analytical gradients** of the log-likelihood function.
 
         This function explicitly derives the **partial derivatives** of the **log-likelihood** function
-        with respect to each model parameter using the **chain rule**. It is more stable and efficient 
+        with respect to each model parameter using the **chain rule**. It is more stable and efficient
         than automatic differentiation (e.g., `jax.grad`).
-        
-        ---
-        **Log-likelihood expressions:**
-        
-        - **Isotropic Gaussian Model** (single `sigma` for x and y errors):
-          \[
-          \log L = -\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left( e_{x,i}^2 + e_{y,i}^2 \right) - n \log(2\pi \sigma)
-          \]
-        
-        - **Anisotropic Gaussian Model** (separate `sigma_r`, `sigma_t` for radial and tangential errors):
-          \[
-          \log L = -\frac{1}{2} \sum_{i=1}^{n} \left( \frac{e_{r,i}^2}{\sigma_r^2} + \frac{e_{t,i}^2}{\sigma_t^2} \right) - n \log(2\pi \sigma_r \sigma_t)
-          \]
 
-        ---
-        **Parameters**
+        **Log-likelihood expressions**
+        -----------------------------
+
+        - **Isotropic Gaussian Model** (single `sigma` for x and y errors):
+
+          .. math::
+             \log L = -\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left( e_{x,i}^2 + e_{y,i}^2 \right) - n \log(2\pi \sigma)
+
+        - **Anisotropic Gaussian Model** (separate `sigma_r`, `sigma_t` for radial and tangential errors):
+
+          .. math::
+             \log L = -\frac{1}{2} \sum_{i=1}^{n} \left( \frac{e_{r,i}^2}{\sigma_r^2} + \frac{e_{t,i}^2}{\sigma_t^2} \right) - n \log(2\pi \sigma_r \sigma_t)
+
+        Parameters
         ----------
         N : float
             Total number of holes in the original (pre-fragmented) circular ring.
@@ -788,8 +780,7 @@ class Calender_Analysis:
         data : pd.DataFrame, optional, default=None
             A subset of the dataset to compute gradients on. If `None`, uses the full dataset.
 
-        ---
-        **Returns**
+        Returns
         -------
         dict
             A dictionary containing **analytical gradients** of the log-likelihood:
@@ -800,13 +791,11 @@ class Calender_Analysis:
             - `"alpha"` : Gradients w.r.t. angular offsets (shape: `num_sections`).
             - `"sigma"` : Gradient w.r.t. sigma (scalar for isotropic, array for anisotropic).
 
-        ---
-        **Notes**
-        --------
+        Notes
+        -----
         - Uses **explicit derivatives** instead of automatic differentiation.
         - More stable than `jax.grad()`.
         - If `neg=True`, returns **negative gradients** (useful for optimization problems).
-
         """
         # Uses the chain rule to determine the analytical gradients of the log likelihood
         # For each item of the graphical model we word out gradients of next dependant variable
@@ -991,18 +980,18 @@ class Calender_Analysis:
         - **Automatic Differentiation (JAX Auto-Diff)**: `grad_likelihood`
         - **Manually Derived Gradients**: `analytic_grad_loglikelihood`
 
-        Each gradient computation is performed on **random mini-batches** of data (subset size controlled by `subset_size`), 
-        simulating **stochastic gradient descent (SGD)** scenarios. This process is repeated `num_runs` times, and 
+        Each gradient computation is performed on **random mini-batches** of data (subset size controlled by `subset_size`),
+        simulating **stochastic gradient descent (SGD)** scenarios. This process is repeated `num_runs` times, and
         the **average execution time, peak memory usage, and gradient agreement** are reported.
 
-        **Key Metrics Measured:**
+        **Key Metrics Measured**
+        ----------------------
         - **Execution time** (seconds)
         - **Peak memory usage** (kilobytes)
         - **Numerical accuracy** (maximum absolute deviation between gradients)
         - **Gradient agreement** (boolean check if both methods agree within `tolerance`)
 
-        ---
-        **Parameters**
+        Parameters
         ----------
         N : float
             Total number of holes in the original calendar ring before fragmentation.
@@ -1021,7 +1010,7 @@ class Calender_Analysis:
             - If `True`, computes and compares the **negative log-likelihood gradients**.
             - If `False`, compares the standard log-likelihood gradients.
         tolerance : float, optional, default=1e-3
-            The numerical precision threshold for gradient agreement. If absolute differences 
+            The numerical precision threshold for gradient agreement. If absolute differences
             exceed this, a mismatch is reported.
         num_runs : int, optional, default=100
             The number of iterations used to compute averaged performance metrics.
@@ -1032,8 +1021,7 @@ class Calender_Analysis:
             - If `True`, returns a dictionary of performance metrics.
             - If `False`, logs the results and returns `None`.
 
-        ---
-        **Returns**
+        Returns
         -------
         dict or None
             If `return_results=True`, returns a dictionary containing:
@@ -1044,6 +1032,14 @@ class Calender_Analysis:
             - `"Deviations"` : Dictionary of parameters where numerical mismatches were found.
 
             If `return_results=False`, logs the results and returns `None`.
+
+        Notes
+        -----
+        - Ensure that both `grad_likelihood` (automatic differentiation) and
+          `analytic_grad_loglikelihood` (analytical gradients) functions are defined
+          and accessible in the current scope.
+        - The `subset_size` should be chosen carefully to balance computational efficiency
+          and representativeness of the full dataset.
         """
 
         # Input validation
@@ -1242,40 +1238,47 @@ class Calender_Analysis:
         Supported methods:
         - Stochastic Gradient Descent (SGD)
         - Adam Optimizer
+        - BFGS (Limited-memory Broyden–Fletcher–Goldfarb–Shanno algorithm)
 
         Recommended Hyperparameters for Each Method:
         -----------------------------------------------------
         - **SGD (Stochastic Gradient Descent)**
-        - `learning_rate`: **0.01 - 0.1** (Recommended: **0.01**)
-        - `num_iterations`: **500 - 5000** (Recommended: **1000**)
-        - `batch_size`: **20 - 100** (If `None`, full batch is used)
-        - `derivative`: **'analytic'** (Recommended) or `'auto'`
+          - `learning_rate`: **0.01 - 0.1** (Recommended: **0.01**)
+          - `num_iterations`: **500 - 5000** (Recommended: **1000**)
+          - `batch_size`: **20 - 100** (If `None`, full batch is used)
+          - `derivative`: **'analytic'** (Recommended) or `'auto'`
 
         - **Adam Optimizer**
-        - `learning_rate`: **0.001 - 0.01** (Recommended: **0.01**)
-        - `num_iterations`: **500 - 5000** (Recommended: **1000**)
-        - `batch_size`: **20 - 100** (If `None`, full batch is used)
-        - `derivative`: **'analytic'** (Recommended) or `'auto'`
+          - `learning_rate`: **0.001 - 0.01** (Recommended: **0.01**)
+          - `num_iterations`: **500 - 5000** (Recommended: **1000**)
+          - `batch_size`: **20 - 100** (If `None`, full batch is used)
+          - `derivative`: **'analytic'** (Recommended) or `'auto'`
+
+        - **BFGS (Limited-memory Broyden–Fletcher–Goldfarb–Shanno algorithm)**
+          - `None` (This is a gradient-based optimization algorithm that typically determines its own step size.)
+          - `num_iterations`: The optimization will run until convergence or the maximum number of function evaluations/iterations is reached (controlled by SciPy's `minimize` function).
+          - `batch_size`: Not directly applicable as BFGS is generally a full-batch optimization method.
+          - `derivative`: **'analytic'** (Recommended for performance and stability) or `'auto'` (though analytical gradients are generally preferred for BFGS).
 
         Parameters
         ----------
         sampling_type : str
-            Optimization method: 'SGD' or 'Adam'.
+            Optimization method: 'SGD', 'Adam', or 'BFGS'.
         num_samples : int, optional
             Number of parameter initializations to optimize. Default is `1000`.
         num_iterations : int, optional
-            Number of iterations for the optimization algorithm. Default is `500`.
+            Number of iterations for the optimization algorithm (for SGD and Adam). For BFGS, this influences the termination criteria of the `minimize` function. Default is `500`.
         learning_rate : float, optional
-            Learning rate for gradient-based optimization. Default is `0.01`.
+            Learning rate for gradient-based optimization (for SGD and Adam). Default is `0.01`.
         batch_size : int, optional
-            Size of minibatches for stochastic gradient estimation. Default is `None` (full-batch).
+            Size of minibatches for stochastic gradient estimation (for SGD and Adam). Default is `None` (full-batch). Not directly applicable to BFGS.
         key : jax.random.PRNGKey, optional
             Random key for reproducibility. Default is a fixed seed.
         derivative : str, optional
             - `'analytic'`: Uses manually computed gradients.
             - `'auto'`: Uses automatic differentiation via `jax.grad()`.
         plot_history : bool, optional
-            If `True`, plots log-likelihood history during optimization.
+            If `True`, plots log-likelihood history during optimization (only supported for single sample optimization with SGD and Adam).
         summary_table : int, optional
             If provided, displays a table with the top `summary_table` results ranked by log-likelihood.
         save_path : str, optional
@@ -1704,14 +1707,15 @@ class Calender_Analysis:
         The likelihood follows a Gaussian model:
 
         - **Isotropic Gaussian:**
-        \[
-        p(\{d_i\} | \mathbf{a}) = (2\pi\sigma^2)^{-n} \prod_{i=1}^{n} \exp \left[ -\frac{(e_{i,x})^2 + (e_{i,y})^2}{2\sigma^2} \right]
-        \]
+
+          .. math::
+             p(\{d_i\} | \mathbf{a}) = (2\pi\sigma^2)^{-n} \prod_{i=1}^{n} \exp \left[ -\frac{(e_{i,x})^2 + (e_{i,y})^2}{2\sigma^2} \right]
+
         - **Anisotropic Gaussian:**
-        \[
-        p(\{d_i\} | \mathbf{a}) = (2\pi\sigma_r\sigma_t)^{-n} \prod_{j=0}^{s-1} \prod_{i \in j} 
-        \exp \left[ -\frac{(e_{ij} \cdot \hat{r}_{ij})^2}{2\sigma_r^2} - \frac{(e_{ij} \cdot \hat{t}_{ij})^2}{2\sigma_t^2} \right]
-        \]
+
+          .. math::
+             p(\{d_i\} | \mathbf{a}) = (2\pi\sigma_r\sigma_t)^{-n} \prod_{j=0}^{s-1} \prod_{i \in j}
+             \exp \left[ -\frac{(e_{ij} \cdot \hat{r}_{ij})^2}{2\sigma_r^2} - \frac{(e_{ij} \cdot \hat{t}_{ij})^2}{2\sigma_t^2} \right]
 
         The choice between isotropic and anisotropic models is determined by `self.model_type`.
 
@@ -1758,8 +1762,8 @@ class Calender_Analysis:
         """
         Runs the Hamiltonian Monte Carlo (HMC) inference using the No-U-Turn Sampler (NUTS).
 
-        This function performs **Bayesian inference** using the NUTS algorithm, which efficiently 
-        samples from the posterior distribution of the parameters while tuning itself for 
+        This function performs **Bayesian inference** using the NUTS algorithm, which efficiently
+        samples from the posterior distribution of the parameters while tuning itself for
         computational efficiency.
 
         The function supports:
@@ -1768,8 +1772,7 @@ class Calender_Analysis:
         - **Saving posterior samples** to a NetCDF file for later analysis.
         - **Trace plots** to diagnose convergence and sampling quality.
 
-        ---
-        **Parameters**
+        Parameters
         ----------
         burnin_period : int, optional, default=2000
             Number of warm-up (burn-in) samples used to adapt the step size and mass matrix.
@@ -1794,8 +1797,7 @@ class Calender_Analysis:
         progress_bar : bool, optional, default=True
             If `True`, displays a progress bar during sampling.
 
-        ---
-        **Returns**
+        Returns
         -------
         mcmc : numpyro.infer.MCMC
             The MCMC object containing:
@@ -1804,7 +1806,6 @@ class Calender_Analysis:
             - Diagnostic statistics.
         samples_time : float
             Estimated runtime (in seconds) for collecting posterior samples (excluding burn-in).
-
         """
 
         # Initialize the RNG key
@@ -1893,16 +1894,15 @@ class Calender_Analysis:
         - Target acceptance probability (`acceptance_prob_range`)
         - Mass matrix structure (`dense_mass_options`)
 
-        Each configuration is assessed using multiple **Markov Chain Monte Carlo (MCMC)** runs 
-        with the No-U-Turn Sampler (NUTS). Calculates performance metrics such as the **number of effective samples**, 
-        **autocorrelation length**, **Gelman-Rubin diagnostic (R-hat)**, and **computational efficiency** 
+        Each configuration is assessed using multiple **Markov Chain Monte Carlo (MCMC)** runs
+        with the No-U-Turn Sampler (NUTS). Calculates performance metrics such as the **number of effective samples**,
+        **autocorrelation length**, **Gelman-Rubin diagnostic (R-hat)**, and **computational efficiency**
         are recorded.
 
-        The best hyperparameter set is determined based on the **Time Per Effective Sample (TPES)**, 
+        The best hyperparameter set is determined based on the **Time Per Effective Sample (TPES)**,
         which measures sampling efficiency.
 
-        ---
-        **Parameters**
+        Parameters
         ----------
         step_size_range : list of float
             A list of step sizes to test.
@@ -1926,8 +1926,7 @@ class Calender_Analysis:
         no_table_results : int, optional, default=1
             The number of top configurations to display in the final summary table.
 
-        ---
-        **Returns**
+        Returns
         -------
         results_df : pandas.DataFrame
             A DataFrame containing performance metrics for each hyperparameter combination:
@@ -1939,22 +1938,16 @@ class Calender_Analysis:
             - `"GR Statistic"` : Gelman-Rubin diagnostic (values close to 1 indicate convergence).
             - `"Time per Iteration"` : Average computation time per sample.
             - `"Time per Effective Sample (TPES)"` : Efficiency metric (lower is better).
-        
+
         best_params : dict
             The best hyperparameter combination based on the lowest **Time Per Effective Sample (TPES)**.
 
-        ---
-        **Notes**
-        --------
-        - **Hyperparameter Selection Guidance**:
-            - **Step size**: Too small → slow mixing, too large → high rejection rate.
-            - **Acceptance probability**: Recommended range is `0.65 - 0.9`.
-            - **Dense mass matrix**: More expensive but better for correlated parameters.
-
+        Notes
+        -----
         - **Performance Metrics**:
-            - **Time per Effective Sample (TPES)**: Lower values indicate a more efficient sampler.
-            - **R-hat Statistic**: Should be close to `1.0` (values > `1.1` suggest non-convergence).
-            - **Autocorrelation Length**: Higher values indicate slower mixing.
+          - **Time per Effective Sample (TPES)**: Lower values indicate a more efficient sampler.
+          - **R-hat Statistic**: Should be close to `1.0` (values > `1.1` suggest non-convergence).
+          - **Autocorrelation Length**: Higher values indicate slower mixing.
         """
 
         if n_chains < 2:
@@ -2035,9 +2028,9 @@ class Calender_Analysis:
         """
         Runs the HMC (Hamiltonian Monte Carlo) chain using the No-U-Turn Sampler (NUTS) with optimised hyperparameters.
 
-        This function initializes and executes a Bayesian inference process using NUTS, 
-        a variant of HMC that automatically determines the optimal number of leapfrog steps. 
-        It tracks computational efficiency, provides optional summary statistics, and allows 
+        This function initializes and executes a Bayesian inference process using NUTS,
+        a variant of HMC that automatically determines the optimal number of leapfrog steps.
+        It tracks computational efficiency, provides optional summary statistics, and allows
         for sample storage.
 
         Parameters
@@ -2129,14 +2122,14 @@ class Calender_Analysis:
         """
         Performs analysis on posterior samples, including summary statistics and corner plots.
 
-        **Features:**
+        **Features**
+        ----------
         - **Summary Table:** Computes detailed summary statistics for posterior parameters, including:
           - Median and standard deviation.
           - 68%, 90%, 95%, and 99% credible intervals.
         - **Corner Plot:** Visualizes parameter correlations using a triangle (corner) plot.
 
-        ---
-        **Parameters**
+        Parameters
         ----------
         posterior_data : arviz.InferenceData or str
             The posterior samples as an **ArviZ InferenceData** object or a path to an **ArviZ-compatible NetCDF file**.
@@ -2146,15 +2139,13 @@ class Calender_Analysis:
             List of parameters to include in the corner plot.
             - Set to `None` to **disable plotting**.
 
-        ---
-        **Returns**
+        Returns
         -------
         None
             Displays the summary table and plots the requested corner plot.
 
-        ---
-        **Notes**
-        --------
+        Notes
+        -----
         - If a **NetCDF file path** is provided, the function attempts to load both:
           - The **full posterior** (`posterior_samples.nc`).
           - The **thinned posterior** (`posterior_samples_thinned.nc`) for efficiency.
@@ -2499,13 +2490,13 @@ class Calender_Analysis:
 
     def ns_prior_transform(self, u):
         """
-        Efficiently transforms unit hypercube samples u ~ U[0,1] into samples from 
+        Efficiently transforms unit hypercube samples u ~ U[0,1] into samples from
         the actual prior distributions defined in `self.priors`.
 
         This function supports a wide variety of prior distributions and efficiently
         transforms unit cube samples into the actual prior range.
 
-        This has be 
+        This has been written to support a wide range of prior distributions in the future
 
         - **Vectorized operations** where possible.
         - **Supports arbitrary prior distributions** dynamically from `self.priors`.
@@ -2594,58 +2585,65 @@ class Calender_Analysis:
 
     def run_nested_sampling(self, num_live=500, max_iter=1000, tol=1e-3, seed=0, save_path = None):
         """
-        Implements a custom Nested Sampling algorithm that stores the necessary 
+        Implements a custom Nested Sampling algorithm that stores the necessary
         quantities for plotting and evidence estimation. This implementation
-        operates in log-space to prevent numerical underflow when computing 
+        operates in log-space to prevent numerical underflow when computing
         Bayesian evidence.
 
-        **Mathematical Background:**
-        ---------------------------------
+        **Mathematical Background**
+        --------------------------
         Nested Sampling iteratively removes the worst live point (lowest likelihood)
         and replaces it with a new sample from the constrained prior.
 
         The Bayesian evidence (marginal likelihood) is given by:
-        
-            Z = ∫ L(θ) π(θ) dθ
-        
+
+            .. math::
+                Z = \int L(\mathbf{\theta}) \pi(\mathbf{\theta}) d\mathbf{\theta}
+
         where:
-            - L(θ) is the likelihood function,
-            - π(θ) is the prior distribution.
+            - :math:`L(\mathbf{\theta})` is the likelihood function,
+            - :math:`\pi(\mathbf{\theta})` is the prior distribution.
 
         Since direct numerical integration is infeasible, we estimate the evidence
         iteratively using the sum:
 
-            Z ≈ Σ w_i L_i
-        
-        where:
-            - w_i = X_i - X_{i+1} are the **prior mass shrinkage weights**,
-            - L_i are the likelihood values of removed (dead) points.
+            .. math::
+                Z \approx \sum w_i L_i
 
-        **Log-space Transformation:**
-        ---------------------------------
-        Since the weights \( w_i \) and likelihoods \( L_i \) can be **very small**, 
+        where:
+            - :math:`w_i = X_i - X_{i+1}` are the **prior mass shrinkage weights**,
+            - :math:`L_i` are the likelihood values of removed (dead) points.
+
+        **Log-space Transformation**
+        --------------------------
+        Since the weights :math:`w_i` and likelihoods :math:`L_i` can be **very small**,
         we work in log-space:
 
-            log Z = log Σ exp(log L_i + log w_i)
+            .. math::
+                \log Z = \log \sum \exp(\log L_i + \log w_i)
 
         To update log-evidence iteratively, we use the numerically stable `logaddexp`:
 
-            logZ_new = logaddexp(logZ, logL_dead + log_X)
+            .. math::
+                \log Z_{\text{new}} = \text{logaddexp}(\log Z, \log L_{\text{dead}} + \log X)
 
-        **Uncertainty Estimation**:
-        ---------------------------------
+        **Uncertainty Estimation**
+        -------------------------
         The uncertainty in log-evidence is approximated as:
 
-            Var(log Z) ≈ Σ (w_i^2 * exp(2 * log L_i))
+            .. math::
+                \text{Var}(\log Z) \approx \sum (w_i^2 \cdot \exp(2 \cdot \log L_i))
 
-        Since directly computing \( \exp(2 \log L_i) \) causes numerical underflow,
+        Since directly computing :math:`\exp(2 \log L_i)` causes numerical underflow,
         we keep everything in **log-space**:
 
-            logZ_err = logaddexp(logZ_err, 2 * log L_i + 2 * log w_i)
+            .. math::
+                \log Z_{\text{err}} = \text{logaddexp}(\log Z_{\text{err}}, 2 \cdot \log L_i + 2 \cdot \log w_i)
 
         Finally, the uncertainty is extracted as:
 
-            logZ_err = exp(0.5 * logZ_err)
+            .. math::
+                \log Z_{\text{err}} = \exp(0.5 \cdot \log Z_{\text{err}})
 
         Parameters
         ----------
@@ -2778,17 +2776,18 @@ class Calender_Analysis:
         """
         Generates plots for Nested Sampling results to assess convergence and sampling behavior.
 
-        **Generated Plots:**
+        **Generated Plots**
+        -------------------
         1. **Log-Evidence (logZ) Convergence Plot:**
-        - Tracks the evolution of the estimated log-evidence (`logZ`) over iterations.
-        
+           - Tracks the evolution of the estimated log-evidence (`logZ`) over iterations.
+
         2. **Log-Likelihood Evolution Plot:**
-        - Displays how the log-likelihood (`logL`) of removed (dead) points evolves over iterations.
+           - Displays how the log-likelihood (`logL`) of removed (dead) points evolves over iterations.
 
         3. **Log-Likelihood vs Log Prior Mass Shrinkage Plot (ξ plot):**
-        - Plots log-likelihood values (`logL`) against the shrinking prior mass (`X`).
+           - Plots log-likelihood values (`logL`) against the shrinking prior mass (`X`).
 
-        **Parameters**
+        Parameters
         ----------
         nested_sampling_results : dict
             Output from the nested sampling algorithm, containing:
@@ -2874,39 +2873,40 @@ class Calender_Analysis:
     def savage_dickey_comparison(self, best_params, burnin_period=2000, n_samples_posterior=10000, n_samples_prior=10000, random_seed=0, show_plots=True, random_key=None):
         """
         Performs the Savage-Dickey density ratio test for comparing nested models.
-        
-        This method estimates the posterior and prior probability densities conditioned at 
+
+        This method estimates the posterior and prior probability densities conditioned at
         `sigma_t = sigma_r` to compute the Savage-Dickey ratio.
 
-        **Method Overview:**
-        ---------------------
+        **Method Overview**
+        -------------------
         1. **Posterior Sampling:**
-        - Runs an optimized **HMC MCMC chain** to draw posterior samples.
-        - Extracts the **posterior samples** for `sigma_t` and `sigma_r`.
-        - Computes transformed coordinates:  
-            - `X = sigma_t - sigma_r`
-            - `Y = sigma_t + sigma_r`
-        
+           - Runs an optimized **HMC MCMC chain** to draw posterior samples.
+           - Extracts the **posterior samples** for `sigma_t` and `sigma_r`.
+           - Computes transformed coordinates:
+             - :math:`X = \sigma_t - \sigma_r`
+             - :math:`Y = \sigma_t + \sigma_r`
+
         2. **Prior Sampling:**
-        - Generates samples from the **prior distribution**.
-        - Computes the same transformed coordinates as for the posterior.
+           - Generates samples from the **prior distribution**.
+           - Computes the same transformed coordinates as for the posterior.
 
         3. **Kernel Density Estimation (KDE) & Probability Calculation:**
-        - Uses **1D KDE** to estimate the probability density at `X = 0`.
-        - Computes:
-            - `P_posterior(sigma_t ≈ sigma_r)`
-            - `P_prior(sigma_t ≈ sigma_r)`
-        - Computes the **Savage-Dickey ratio**:  
-            $$ R_{SD} = \frac{P_{\text{posterior}}(X \approx 0)}{P_{\text{prior}}(X \approx 0)} $$
+           - Uses **1D KDE** to estimate the probability density at :math:`X = 0`.
+           - Computes:
+             - :math:`P_{\text{posterior}}(\sigma_t \approx \sigma_r)`
+             - :math:`P_{\text{prior}}(\sigma_t \approx \sigma_r)`
+           - Computes the **Savage-Dickey ratio**:
+             .. math::
+                R_{SD} = \frac{P_{\text{posterior}}(X \approx 0)}{P_{\text{prior}}(X \approx 0)}
 
         4. **Visualizations (Optional, Controlled by `show_plots`):**
-        - **Corner Plots**:  
-            - Visualizes `(X, Y)` distributions for both **posterior** and **prior**.
-        - **KDE Contour + 1D KDE Plots (Side-by-Side)**:
-            - **Left:** 2D KDE of `(X, Y)`.
-            - **Right:** 1D KDE of `X` (with probability at `X=0` marked).
+           - **Corner Plots**:
+             - Visualizes :math:`(X, Y)` distributions for both **posterior** and **prior**.
+           - **KDE Contour + 1D KDE Plots (Side-by-Side)**:
+             - **Left:** 2D KDE of :math:`(X, Y)`.
+             - **Right:** 1D KDE of :math:`X` (with probability at :math:`X=0` marked).
 
-        **Parameters**
+        Parameters
         ----------
         best_params : array-like
             Best-fit parameters to initialize HMC.
@@ -2919,8 +2919,8 @@ class Calender_Analysis:
         random_seed : int, optional (default=0)
             Seed for reproducibility.
         tol : float, optional (default=0.01)
-            Defines the **small window width** for estimating  
-            `P(sigma_t - sigma_r ≈ 0)`.
+            Defines the **small window width** for estimating
+            :math:`P(\sigma_t - \sigma_r \approx 0)`.
         show_plots : bool, optional (default=True)
             If `True`, generates:
             - **Corner Plots**
@@ -2928,12 +2928,12 @@ class Calender_Analysis:
         random_key : int, optional (default=None)
             JAX random key for reproducibility.
 
-        **Returns**
+        Returns
         -------
         dict
             Dictionary containing:
-            - `"posterior_probability"` : Estimated posterior density at `X = 0`.
-            - `"prior_probability"` : Estimated prior density at `X = 0`.
+            - `"posterior_probability"` : Estimated posterior density at :math:`X = 0`.
+            - `"prior_probability"` : Estimated prior density at :math:`X = 0`.
             - `"savage_dickey_ratio"` : Ratio of posterior to prior probability densities.
         """
         # Ensure we are using the anisotropic model

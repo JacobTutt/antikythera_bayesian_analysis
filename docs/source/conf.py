@@ -18,10 +18,12 @@ release = '1.0.0'
 # Extensions
 extensions = [
     'sphinx.ext.autodoc',
-    'sphinx.ext.napoleon',       # Supports Google and NumPy style docstrings
-    'sphinx.ext.viewcode',       # Adds links to source code
-    'sphinx_autodoc_typehints',  # Includes type hints in the documentation
+    'sphinx.ext.napoleon',
+    'sphinx.ext.viewcode',
+    'sphinx_autodoc_typehints',
+    'sphinx.ext.mathjax', 
 ]
+
 # Autodoc configuration
 autodoc_default_options = {
     'members': True,             # Include all members (functions, classes, etc.)
