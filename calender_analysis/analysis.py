@@ -9,6 +9,7 @@ import itertools
 import tracemalloc
 import multiprocessing
 
+
 # Scientific computing & data handling
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ import jax
 import jax.numpy as jnp
 import jax.tree_util as jtu
 from scipy.stats import gaussian_kde
+from scipy.optimize import minimize
 jax.config.update("jax_enable_x64", True)
 
 # NumPyro
@@ -134,22 +136,22 @@ class Calender_Analysis:
         # Default priors if none provided - these can be individually overridden
         if model_type == "isotropic":
             default_priors = {
-                "N": dist.Uniform(340, 370),
-                "r": dist.Uniform(65, 85),
-                "x0": dist.Normal(80, 5),
-                "y0": dist.Normal(135, 5),
-                "alpha": dist.Normal(-2.5, 1),
-                "sigma": dist.Uniform(0, 5),
+                "N": dist.Uniform(330, 370),
+                "r": dist.Uniform(65, 90),
+                "x0": dist.Uniform(60, 100),
+                "y0": dist.Uniform(120, 160),
+                "alpha": dist.Uniform(-2.8, -2.1),
+                "sigma": dist.LogUniform(1e-5, 5),
             }
         else: # Anisotropic model - seperate sigma_r and sigma_t
             default_priors = {
-                "N": dist.Uniform(340, 370),
-                "r": dist.Uniform(65, 85),
-                "x0": dist.Normal(80, 5),
-                "y0": dist.Normal(135, 5),
-                "alpha": dist.Normal(-2.5, 1),
-                "sigma_r": dist.Uniform(0, 5),
-                "sigma_t": dist.Uniform(0, 5),
+                "N": dist.Uniform(330, 370),
+                "r": dist.Uniform(65, 90),
+                "x0": dist.Uniform(60, 100),
+                "y0": dist.Uniform(120, 160),
+                "alpha": dist.Uniform(-2.8, -2.1),
+                "sigma_r": dist.LogUniform(1e-5, 5),
+                "sigma_t": dist.LogUniform(1e-5, 5),
             }
 
         # Use user-defined priors if provided, otherwise use default priors
@@ -1233,9 +1235,6 @@ class Calender_Analysis:
 
     # ------------------ Maximum Likelihood Estimation (MLE) ------------------
 
-
-    # Can i apply early stopping to these ? 
-
     def max_likelihood_est(self, sampling_type, num_samples=1000, num_iterations=500, learning_rate=0.01, batch_size=None, key=None, derivative='analytic', plot_history=False, summary_table = None, save_path = None):
         """
         Perform Maximum Likelihood Estimation (MLE) using stochastic optimization methods.
@@ -1287,10 +1286,14 @@ class Calender_Analysis:
         dict
             Dictionary containing the best parameter set found.
         """
+        ### MADE A CHANGE HERE: 
 
         # Ensure that the sampling type is valid
-        if sampling_type not in ['SGD',  'Adam']:
-            raise ValueError("sampling_type must be one of 'SGD' or 'Adam'.")
+        # if sampling_type not in ['SGD',  'Adam']:
+        #     raise ValueError("sampling_type must be one of 'SGD' or 'Adam'.")
+        
+        if sampling_type not in ['SGD',  'Adam', 'BFGS']:
+            raise ValueError("sampling_type must be one of 'SGD', 'Adam', or 'BFGS'.")
         
         if summary_table is not None:
             if not isinstance(summary_table, int) or summary_table >= num_samples:
@@ -1331,12 +1334,12 @@ class Calender_Analysis:
                 plot_data = all_results_log_likelihood[cutoff:]
 
                 # Set high-quality plot settings
-                plt.figure(figsize=(8, 6), dpi=300) 
+                plt.figure(figsize=(6, 4), dpi=300) 
                 sns.set_context("talk")  
                 sns.set_style("whitegrid") 
 
                 # Plot log-likelihood history
-                plt.plot(plot_data, linestyle='-', color='darkblue', linewidth=2, alpha=0.8, label="Negative Log-Likelihood")
+                plt.plot(plot_data, linestyle='-', color='darkblue', linewidth=2, alpha=0.8, label="Negative Log-Likelihood - Gradient Descent")
 
                 # Labels and formatting
                 plt.xlabel("Iterations", fontsize=12, fontweight='bold')
@@ -1344,8 +1347,8 @@ class Calender_Analysis:
                 plt.title("Log-Likelihood Convergence", fontsize=12, fontweight='bold', pad=15)
                 plt.yscale("log")
                 plt.grid(which="both", linestyle="--", linewidth=0.7, alpha=0.6)
-                plt.xticks(fontsize=10)
-                plt.yticks(fontsize=10)
+                plt.xticks(fontsize=12)
+                plt.yticks(fontsize=18)
                 plt.tight_layout()
                 plt.legend(fontsize=10)
                 plt.show()
@@ -1370,6 +1373,86 @@ class Calender_Analysis:
         # Sample from the priors simply as initialisation position for MLE optimisation
         # All initial samples are retrieved in one go
         prior_samples = self.sample_from_priors(key, num_samples=num_samples)
+
+
+        # ------------------ BFGS Optimizer ------------------
+
+        if sampling_type == 'BFGS':
+
+            # Check if sigma is anisotropic (vector per section) or isotropic (scalar)
+            sigma_size = 2 if self.model_type == "anisotropic" else 1
+
+            def flatten_params(params_dict):
+                return np.concatenate([
+                    [params_dict["N"]],
+                    [params_dict["r"]],
+                    np.array(params_dict["x0"]),
+                    np.array(params_dict["y0"]),
+                    np.array(params_dict["alpha"]),
+                    np.array(params_dict["sigma"]) if sigma_size > 1 else [params_dict["sigma"]]
+                ])
+
+            def unflatten_params(param_vector):
+                idx = 0
+                N = param_vector[idx]; idx += 1
+                r = param_vector[idx]; idx += 1
+                x0 = param_vector[idx:idx + self.num_sections]; idx += self.num_sections
+                y0 = param_vector[idx:idx + self.num_sections]; idx += self.num_sections
+                alpha = param_vector[idx:idx + self.num_sections]; idx += self.num_sections
+                sigma = param_vector[idx:idx + sigma_size] if sigma_size > 1 else param_vector[idx]
+                return {
+                    "N": N,
+                    "r": r,
+                    "x0": x0,
+                    "y0": y0,
+                    "alpha": alpha,
+                    "sigma": sigma
+                }
+
+            # Build bounds for all parameters
+            bounds = []
+            for param in self.priors.keys():
+                prior = self.priors[param]
+                if param in ["x0", "y0", "alpha"]:
+                    size = self.num_sections
+                elif param in ["sigma_r", "sigma_t"]:
+                    size = 1  # anisotropic case: each has scalar sigma per direction
+                else:
+                    size = 1
+                bounds.extend([(prior.low, prior.high)] * size)
+
+            for i in tqdm(range(num_samples), desc="Optimizing MLE using BFGS:", leave=True):
+                init_params = {k: np.array(v[i]) for k, v in prior_samples.items()}
+                x0_flat = flatten_params(init_params)
+
+                def scipy_loss(param_vector):
+                    param_dict = unflatten_params(param_vector)
+                    return loss_fn(param_dict, self.data)
+
+                result = minimize(scipy_loss, x0_flat, method='L-BFGS-B', bounds=bounds)
+
+                # 1. Extracting the inverse Hessian approximation
+                if hasattr(result, "hess_inv"):
+                    try:
+                        hess_inv = result.hess_inv.todense()  # if it's a sparse matrix
+                    except AttributeError:
+                        hess_inv = np.array(result.hess_inv)  # already dense
+                else:
+                    hess_inv = None
+
+                # 2. Calculate the Standard deviation on each parameter is the sqrt of diagonal of the inverse Hessian
+                if hess_inv is not None:
+                    std_errors = np.sqrt(np.diag(hess_inv))
+                else:
+                    std_errors = None  # Could not compute
+
+
+                best_params = unflatten_params(result.x)
+                best_params["alpha"] = (best_params["alpha"] + np.pi) % (2 * np.pi) - np.pi
+
+                final_log_likelihood = -result.fun
+                all_results.append({"params": best_params, "log_likelihood": final_log_likelihood,  "std_errors": std_errors})
+
 
         # ------------------ Stochastic Gradient Descent ------------------
 
@@ -1425,6 +1508,13 @@ class Calender_Analysis:
 
                 # Extract the parameters for the current sample from the dictionary - ensure they are jnp arrays
                 params = {k: jnp.array(v[i]) for k, v in prior_samples.items()}
+
+                # This simply helps sensibly initialise sigma for the model rather than using 
+                # loguniform prior
+                if self.model_type == 'anisotropic':
+                    params['sigma'] = jnp.array([0.1, 0.1])
+                if self.model_type == 'isotropic':
+                    params['sigma'] = jnp.array([0.1])
 
                 # Initialise the optimizer state
                 opt_state = optimizer.init(params)
@@ -1486,7 +1576,7 @@ class Calender_Analysis:
                 # Handle sigma separately (single value for isotropic, vector for anisotropic)
                 if isinstance(params["sigma"], jax.Array) or isinstance(params["sigma"], np.ndarray):
                     sigma_value = np.array(params["sigma"])  # Convert JAX array to NumPy
-                    sigma_str = f"{sigma_value:.2f}" if sigma_value.size == 1 else np.array2string(sigma_value, precision=2, separator=',')
+                    sigma_str = f"{sigma_value.item():.2f}" if sigma_value.size == 1 else np.array2string(sigma_value, precision=2, separator=',')
                 else:
                     sigma_str = f"{params['sigma']:.2f}"
 
@@ -1505,8 +1595,10 @@ class Calender_Analysis:
             with open(save_path, "wb") as f:
                 pickle.dump(filtered_results, f)
             logging.info(f"MLE Run results saved to {save_path}")
-
+        
         return filtered_results
+    
+
     
     def mle_analysis(self, mle_results, figsize=(10, 8)):
         """
@@ -1747,28 +1839,46 @@ class Calender_Analysis:
             logging.info(f" MCMC samples saved to {save_path}")
 
        # Generate trace plots if requested
+
         if traceplot is not None:
             posterior_data = az.from_numpyro(mcmc)
             plot_params = traceplot
 
-            # Ensure only existing parameters are selected
+            # Custom labels for proper
+            param_labels = {
+                "N": "Total Holes $N$",
+                "r": "Radius $r$",
+                "sigma_r": "Radial Error $\sigma_r$",
+                "sigma_t": "Tangential Error $\sigma_t$",
+            }
+
             var_names = [param for param in plot_params if param in posterior_data.posterior.keys()]
+            label_list = [param_labels.get(param, param) for param in var_names]
 
-            # Generate trace plots using ArviZ
+            # ArviZ-allowed styling (limited)
+            az.style.use("arviz-darkgrid")
 
-            custom_colors = ["red", "blue", "black", "purple"]
-
-            az.plot_trace(
+            # Generate the trace plot
+            axes = az.plot_trace(
                 posterior_data,
                 var_names=var_names,
-                figsize=(12, len(var_names) * 3.5),
-                compact=True,  
-                chain_prop={"color": custom_colors},
+                figsize=(10, len(var_names) * 3.5),
+                compact=True,
+                chain_prop={"color": ["red", "blue", "black", "purple"]},
                 legend=True
             )
-            plt.show()
 
-            
+            # Apply Matplotlib customizations to all axes
+            for i, ax_group in enumerate(axes):
+                for ax in (ax_group if isinstance(ax_group, np.ndarray) else [ax_group]):
+                    ax.tick_params(axis='x', labelsize=14)
+                    ax.tick_params(axis='y', labelsize=14)
+                    ax.set_xlabel("Sample", fontsize=14)
+                    ax.set_title(label_list[i], fontsize=17, pad=12)
+
+            plt.tight_layout()
+            plt.subplots_adjust(hspace=0.5)
+            plt.show()        
         logging.info(f"Total MCMC Run Time: {total_time:.2f} seconds \n Non Burn-In Run Time: {samples_time:.2f} seconds")
 
         return mcmc, samples_time
@@ -2196,6 +2306,15 @@ class Calender_Analysis:
         - The plot **shades the full credible interval region**, with upper and lower bounds shown.
         """
 
+        # Mapping of parameter names to LaTeX-formatted labels
+        label_map = {
+            "N": r"$N$ (Number of Holes)",
+            "r": r"$r$ (Radius)",
+            "sigma_r": r"$\sigma_r$ (Radial Error)",
+            "sigma_t": r"$\sigma_t$ (Tangential Error)",
+            "sigma": r"$\sigma$ (Isotropic Error)",
+        }
+
         # Check if posterior_data is an InferenceData object, otherwise attempt to load it
         if not isinstance(posterior_data, az.InferenceData):
             # If a string is provided, attempt to load the NetCDF file assuming it is a path
@@ -2235,153 +2354,158 @@ class Calender_Analysis:
         ax.plot(percentiles, upper_bounds, color="red", label="Full")
         ax.plot(percentiles, lower_bounds, color="red")
         ax.fill_between(percentiles, lower_bounds, upper_bounds, color="red", alpha=0.3)
-        ax.set_xlabel("Credible Interval Level (%)", fontsize=14)
-        ax.set_ylabel(f"{param} Estimate", fontsize=14)
-        ax.legend(fontsize=12)
+
+        y_label = label_map.get(param, param)
+        ax.set_xlabel("Credible Interval Level (%)", fontsize=16)
+        ax.set_ylabel(y_label, fontsize=16)
+        ax.tick_params(axis='x', labelsize=14)
+        ax.tick_params(axis='y', labelsize=14)
+        ax.legend(fontsize=14)
         ax.grid(True, linestyle="--", alpha=0.6)
         plt.show()
 
         return None
-
-
-
-    ##### THIS STILL NEEDS FINE TUNING GRAPH WISE
     
+
+
     def plot_posterior_holes(self, posterior_data, hole_no=1, section_no=5):
         """
         Plots the posterior distribution of hole positions based on MCMC samples.
 
-        This function visualizes the **posterior distribution** of a selected hole's position
-        using samples from the **Markov Chain Monte Carlo (MCMC) posterior distribution**.
-        It overlays:
-        - **MCMC posterior samples** (scatter plot).
-        - **Mean posterior estimate** with ±1 sigma error bars.
-        - **Observed hole position** from the dataset.
-
-        ---
-        **Parameters**
+        Parameters
         ----------
         posterior_data : arviz.InferenceData or str
-            The MCMC posterior samples as an **ArviZ InferenceData** object or a **path to a NetCDF file**.
-        hole_no : int, optional, default=1
+            The MCMC posterior samples as an ArviZ InferenceData object or a path to a NetCDF file.
+        hole_no : int, optional
             The hole number to analyze.
-        section_no : int, optional, default=5
+        section_no : int, optional
             The section number to analyze.
 
-        ---
-        **Returns**
+        Returns
         -------
         None
             Displays a plot of credible intervals.
-
-        ---
-        **Raises**
-        ---------
-        ValueError
-            If the specified `hole_no` and `section_no` do not exist in the observed dataset.
-        TypeError
-            If `posterior_data` is neither an **ArviZ InferenceData object** nor a **valid NetCDF file path**.
-        ValueError
-            If there is an issue loading the NetCDF file.
         """
-
-        # Ensure that the hole number and section number are in the observed data allowing for comparison
         if not jnp.any((self.hole_nos_obs == hole_no) & (self.section_ids_obs == section_no)):
-            raise ValueError("Error: The hole number and section number combination is not in the observed data - so there will be no comparison to make.")
+            raise ValueError("Error: The hole number and section number combination is not in the observed data.")
 
-        # Load posterior data if not already an InferenceData object
         if not isinstance(posterior_data, az.InferenceData):
             if isinstance(posterior_data, str) and os.path.isfile(posterior_data):
                 try:
                     posterior_data_path = posterior_data
                     thinned_posterior_path = posterior_data_path.replace(".nc", "_thinned.nc")
                     posterior_data = az.from_netcdf(posterior_data)
-                    # Load thinned data if available
                     if os.path.isfile(thinned_posterior_path):
                         thinned_posterior_data = az.from_netcdf(thinned_posterior_path)
                         mcmc_params = thinned_posterior_data.posterior
                         logging.info("Loaded thinned posterior data from NetCDF file.")
                     else:
-                        thinned_posterior_data = None
                         mcmc_params = posterior_data.posterior
-                    
+                        thinned_posterior_data = None
                     logging.info("Loaded posterior data from NetCDF file.")
                 except Exception as e:
                     raise ValueError(f"Error loading NetCDF file: {e}")
             else:
                 raise TypeError("posterior_data must be an ArviZ InferenceData object or a valid NetCDF file path.")
         else:
-            thinned_posterior_data = None 
+            thinned_posterior_data = None
             mcmc_params = posterior_data.posterior
 
-        # Extract all parameter names from the posterior samples
         param_names = list(mcmc_params.keys())
-
-        # Store samples for each parameter as a dictionary - each as an array
         all_param_samples = {param: mcmc_params[param].stack(sample=("chain", "draw")).values for param in param_names}
 
-        # Convert samples parameter value to JAX arrays
         N_samples = jnp.array(all_param_samples['N'])
         r_samples = jnp.array(all_param_samples['r'])
         x0_samples = jnp.array(all_param_samples['x0']).T
         y0_samples = jnp.array(all_param_samples['y0']).T
         alpha_samples = jnp.array(all_param_samples['alpha']).T
 
-        # ------------------ Compute Hole Positions ------------------
-
-        # Compute hole positions using using `hole_positions` function
-        # Loop through all samples and compute hole positions
+        # --- Compute MCMC hole positions ---
         mcmc_hole_locations = []
         for i in range(len(N_samples)):
             hole_position = self.hole_positions(
-                float(N_samples[i]), float(r_samples[i]), 
-                x0_samples[i], y0_samples[i], alpha_samples[i], 
+                float(N_samples[i]), float(r_samples[i]),
+                x0_samples[i], y0_samples[i], alpha_samples[i],
                 section_ids=section_no, hole_nos=hole_no
             )
             mcmc_hole_locations.append(hole_position)
 
-        # Convert list to JAX array & separate X and Y positions
         mcmc_hole_locations = jnp.array(mcmc_hole_locations).T
         x_post_samples, y_post_samples = mcmc_hole_locations[0], mcmc_hole_locations[1]
 
-        # Compute mean & standard deviation of posterior samples
         x_mean, y_mean = jnp.mean(x_post_samples), jnp.mean(y_post_samples)
         x_std, y_std = jnp.std(x_post_samples), jnp.std(y_post_samples)
 
-        # Get observed data point from original dataset
+        # --- Radial and tangential uncertainties (if anisotropic model) ---
+        if self.model_type == "anisotropic":
+            dx = x_post_samples - x_mean
+            dy = y_post_samples - y_mean
+
+            theta = alpha_samples[:, section_no - 1] if alpha_samples.ndim > 1 else alpha_samples
+            cos_theta = jnp.cos(theta)
+            sin_theta = jnp.sin(theta)
+
+            dr = dx * cos_theta + dy * sin_theta
+            dt = -dx * sin_theta + dy * cos_theta
+
+            sigma_r = jnp.std(dr)
+            sigma_t = jnp.std(dt)
+
+            theta_mean = jnp.mean(theta)
+
+            u_r = jnp.array([jnp.cos(theta_mean), jnp.sin(theta_mean)])
+            u_t = jnp.array([-jnp.sin(theta_mean), jnp.cos(theta_mean)])
+
+            delta_r = sigma_r * u_r
+            delta_t = sigma_t * u_t
+
+        # --- Get observed hole position ---
         hole_obs_index = jnp.where((self.hole_nos_obs == hole_no) & (self.section_ids_obs == section_no))
         x_obs = self.x_obs[hole_obs_index]
         y_obs = self.y_obs[hole_obs_index]
 
-        # ------------------ Plot Posterior Hole Positions ------------------
-        fig, ax = plt.subplots(figsize=(7, 7))
+        # --- Plot ---
+        fig, ax = plt.subplots(figsize=(7, 5))
 
-        # Scatter plot of posterior samples (tiny dots)
         ax.scatter(x_post_samples, y_post_samples, s=5, color="blue", alpha=0.3, label="MCMC Samples")
-
-        # Mean posterior estimate (crosshairs)
-        ax.errorbar(x_mean, y_mean, xerr=x_std, yerr=y_std, fmt="rx", markersize=10, label="Mean Posterior (±1σ)")
-
-        # Observed hole position (red circle)
         ax.scatter(x_obs, y_obs, color="red", s=100, edgecolor="black", label="Observed Hole")
 
-        ax.set_xlabel("X Position", fontsize=14)
-        ax.set_ylabel("Y Position", fontsize=14)
+        if self.model_type == "isotropic":
+            ax.errorbar(x_mean, y_mean, xerr=x_std, yerr=y_std, fmt="rx", markersize=18, elinewidth=2, label=r"Mean Posterior ($\pm1\sigma$)")
+
+        # Add radial/tangential error bars if anisotropic
+        if self.model_type == "anisotropic":
+            ax.errorbar(x_mean, y_mean, fmt="rx", markersize=18, label=r"Mean Posterior ($\pm1\sigma_r$, $\pm1\sigma_t$)")
+            ax.plot([x_mean - delta_r[0], x_mean + delta_r[0]],
+                    [y_mean - delta_r[1], y_mean + delta_r[1]],
+                    color="red", lw=2)
+
+            ax.plot([x_mean - delta_t[0], x_mean + delta_t[0]],
+                    [y_mean - delta_t[1], y_mean + delta_t[1]],
+                    color="red", lw=2)
+
+        ax.set_xlabel("X Position", fontsize=15)
+        ax.set_ylabel("Y Position", fontsize=15)
         ax.set_title(f"Posterior Hole Positions\n(Hole {hole_no}, Section {section_no})", fontsize=16)
-        ax.legend(fontsize=12)
+        ax.legend(fontsize=14)
         ax.grid(True, linestyle="--", alpha=0.5)
         plt.show()
 
         return mcmc_hole_locations
 
 
-######## NEED TO WORK OUT HOW TO COMPUTE EVIDENCES - NESTED SAMPLING
+######## THIS IS NESTED SAMPLING ########
 
 
     def ns_prior_transform(self, u):
         """
         Efficiently transforms unit hypercube samples u ~ U[0,1] into samples from 
         the actual prior distributions defined in `self.priors`.
+
+        This function supports a wide variety of prior distributions and efficiently
+        transforms unit cube samples into the actual prior range.
+
+        This has be 
 
         - **Vectorized operations** where possible.
         - **Supports arbitrary prior distributions** dynamically from `self.priors`.
@@ -2423,11 +2547,12 @@ class Calender_Analysis:
                 values = scipy.stats.gamma.ppf(u_subset, a=prior.concentration, scale=prior.rate)
             elif isinstance(prior, dist.Beta):
                 values = scipy.stats.beta.ppf(u_subset, a=prior.concentration1, b=prior.concentration0)
-            elif isinstance(prior, dist.TruncatedNormal):
-                low_n, high_n = (prior.low - prior.loc) / prior.scale, (prior.high - prior.loc) / prior.scale
-                values = scipy.stats.truncnorm.ppf(u_subset, low_n, high_n, loc=prior.loc, scale=prior.scale)
             elif isinstance(prior, dist.Exponential):
                 values = -np.log(1 - u_subset) / prior.rate 
+            elif isinstance(prior, dist.LogUniform):
+                log_low = np.log(prior.low)
+                log_high = np.log(prior.high)
+                values = np.exp(log_low + u_subset * (log_high - log_low))
             else:
                 raise ValueError(f"Unsupported prior type for parameter {param}: {type(prior)}")
 
@@ -2742,6 +2867,8 @@ class Calender_Analysis:
         plt.show()
 
 
+
+########## Savage Dickey Comparisom ##########
 
     
     def savage_dickey_comparison(self, best_params, burnin_period=2000, n_samples_posterior=10000, n_samples_prior=10000, random_seed=0, show_plots=True, random_key=None):
