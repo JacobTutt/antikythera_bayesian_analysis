@@ -291,8 +291,8 @@ class Calender_Analysis:
         It uses color-coded markers for different sections, adds annotations for hole numbers at regular
         intervals, and marks section transitions with perpendicular bisecting lines.
 
-        Features
-        --------
+        **Features**
+
         - **Color-coded markers**: Each section ID is assigned a unique color.
         - **Different marker styles**: Cycles through circle, square, and triangle markers.
         - **Annotations**: Labels every third hole with its hole number.
