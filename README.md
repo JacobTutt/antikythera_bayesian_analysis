@@ -1,17 +1,55 @@
-# S2 Coursework Repository
-This repository contains the package, its documentation, and implementation required for the coursework.
+# S2 Coursework - Bayesian Analysis of the Antikythera Mechanism
+
+This repository contains the pipeline, its documentation, and notebooks explaining its functionality and the implementation required for the coursework.
 ---
 
 ## Documentation for the project
 
 [Documentation on Read the Docs](https://coursework-s2.readthedocs.io/en/latest/Calender_Analysis/index.html)
 
-The coursework uses a modular, inherited class-based structure, which is explained below, to make it adaptable to different probability distributions. As a result documentation has been created for easier understanding of each functions methods and implementation
+For this project I have produced documentation for the pipeline to make it more accessible and easier to follow, hosted on read the docs this should allow you to see a break down of each functions details as well as direct access to the course code. Throughout the notebooks hyperlinks are provided to the relevent functions.
+
+---
+
+## Calendar Analysis Pipeline Outline
+
+Provides a flexible and modular framework for modelling the fragmented Antikythera calendar ring using Bayesian inference.
+
+**1. Data Filtering**
+
+* **Multiple Filtering Levels:** Includes `None`, `Basic`, and `Full` modes to accommodate varying degrees data filtering.
+* **Automated Unreliable Section Removal:** Identifies and discards sections with few holes, to ensure data that will greater constrain global parameters.
+
+**2. Error Model Selection**
+
+* **Gaussian Error Models:** Allows switching between `isotropic` (uniform uncertainty) and `anisotropic` (direction-dependent uncertainty).
+* **Isotropic Model**
+* **Anisotropic Mode:** Separates uncertainty into `radial` (distance from center) and `tangential` (along the ring) components.
 
 
-## Outline of Implementation
+**3. Maximum Likelihood Estimation (MLE)**
 
-# mention filtering, model types and all implements in class automatically. 
+* **Optimisation Algorithms:** Employs Stochastic Gradient Descent (`SGD`), Adam optimisation and Scipy minimisation with adjustable learning rates.
+* **Multiple Initialisations:** Uses several starting points for parameter optimisation to avoid local minima.
+* **Invalid Result Filtering:** Automatically discards parameter sets that yield non-physical or invalid results.
+
+**4. Bayesian Inference via MCMC (NUTS)**
+
+* **Sampling Algorithm:** Implements the No-U-Turn Sampler (`NUTS`), a form of Hamiltonian Monte Carlo.
+* **Automatic Thinning:** Automatically prefroms thinning by fatoring in autocorrelation in the sampled parameter values by automatically discarding correlated samples.
+* **Hyperparameter Optimisation:** Includes tools for tuning the hyperparameters of the MCMC sampler.
+* **Convergence Diagnostics:** Provides metrics and visualisations to assess whether the MCMC chains have converged to the true posterior distribution.
+
+**5. Model Comparison with Savage-Dickey Ratio**
+
+* **Calculation:** Computes the Savage-Dickey ratio to estimate Bayes factors for comparing the nested models.
+* **Density Estimation:** Utilises Kernel Density Estimation (`KDE`) to approximate the prior and posterior densities of the constrained parameter.
+
+**6. Custom Nested Sampling**
+
+* **Complete Nested Sampler:** Offers a full implementation of the Nested Sampling algorithm for robust Bayesian model comparison and parameter estimation.
+* **Stable Evidence Calculation:** Computes Bayesian evidence in log-space to maintain numerical stability.
+* **Prior Sampling:** Efficiently handles sampling from constrained prior distributions, ensuring physically relevant parameter exploration. The `ns_prior_transform` function maps unit cube samples to various prior types for robust use with for both scalar and section-based parameters.
 
 
 ## Installation Instructions
@@ -53,7 +91,6 @@ Open the notebooks and select the created kernel (Python (S2 Coursework)) to run
 ## Report for the Coursework
 
 The coureworks PDF report can be found under the **Report** directory of the repository
-
 
 ## Declaration of Use of Autogeneration Tools
 
