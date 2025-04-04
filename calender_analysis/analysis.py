@@ -38,6 +38,7 @@ import matplotlib.lines as mlines
 import seaborn as sns
 import arviz as az
 import corner
+from matplotlib.patches import Ellipse, Circle
 
 # Progress & display utilities
 from tqdm.notebook import tqdm  
@@ -390,10 +391,10 @@ class Calender_Analysis:
         
         # Plot two legends - one for section ID and one for bisector labels
         # Legend 1 - Section ID (maybe removed later)
-        legend = plt.legend(title="Section ID", loc="upper right", fontsize=12, frameon=True)
+        legend = plt.legend(title="Section ID", loc="upper right", fontsize=16, frameon=True)
         legend.get_frame().set_alpha(0.8)
         # Legend 2 - Bisector Labels
-        plt.legend(handles=bisector_legend_handles, loc="upper center", fontsize=10, frameon=True, title="Split Locations")
+        plt.legend(handles=bisector_legend_handles, loc="upper center", fontsize=16, frameon=True, title="Split Locations")
         plt.gca().add_artist(legend)
         
         # Plot configuration
@@ -401,11 +402,13 @@ class Calender_Analysis:
         y_min, y_max = self.data["Mean(Y)"].min(), self.data["Mean(Y)"].max()
         plt.xlim(x_min - 5, x_max + 5.5)
         plt.ylim(y_min - 4, y_max + 4)
-        plt.xlabel("Mean X Position (mm)", fontsize=14)
-        plt.ylabel("Mean Y Position (mm)", fontsize=14)
-        plt.title("Measured Hole Locations in the x-y Plane", fontsize=16)
+        plt.xlabel("Mean X Position (mm)", fontsize=18)
+        plt.ylabel("Mean Y Position (mm)", fontsize=18)
+        plt.title("Measured Hole Locations in the x-y Plane", fontsize=20)
         plt.grid(True, linestyle=":", linewidth=0.6, alpha=0.8)
         plt.minorticks_on()
+        plt.xticks(fontsize=16)
+        plt.yticks(fontsize=16)
 
         plt.show()
 
@@ -1512,13 +1515,13 @@ class Calender_Analysis:
 
                 # Extract the parameters for the current sample from the dictionary - ensure they are jnp arrays
                 params = {k: jnp.array(v[i]) for k, v in prior_samples.items()}
-
                 # This simply helps sensibly initialise sigma for the model rather than using 
                 # loguniform prior
                 if self.model_type == 'anisotropic':
                     params['sigma'] = jnp.array([0.1, 0.1])
                 if self.model_type == 'isotropic':
                     params['sigma'] = jnp.array([0.1])
+    
 
                 # Initialise the optimizer state
                 opt_state = optimizer.init(params)
@@ -1653,14 +1656,22 @@ class Calender_Analysis:
         unique_sections = self.data["Section ID"].unique()
         palette = sns.color_palette("Dark2", len(unique_sections))
 
+        
         # Plot observed and estimated positions
-        plt.scatter(self.data["Mean(X)"], self.data["Mean(Y)"],
-                    color='black', label="Observed Positions", 
-                    s=80, edgecolors='black', alpha=0.6, marker='o')
-
         plt.scatter(mle_hole_positions_x, mle_hole_positions_y, 
                     color='red', label="MLE Estimated Positions", 
-                    s=80, alpha=0.6, marker='x')
+                    s=80, alpha=1, marker='x')
+        
+        plt.scatter(
+            self.data["Mean(X)"], self.data["Mean(Y)"],
+            facecolors='none',        # hollow fill
+            edgecolors='black',       # black border
+            s=80,
+            alpha=0.6,
+            label="Observed Positions",
+            marker='o'
+        )
+
 
         # Annotate every 3rd hole, adjusting position for visibility
         for i in range(self.n_holes):
@@ -1674,19 +1685,19 @@ class Calender_Analysis:
                     hole_num_int >= 69: (5, 0, 'left', 'center')
                 }
                 dx, dy, ha, va = offsets[True]
-                plt.text(x + dx, y + dy, str(hole_num_int), fontsize=12, ha=ha, va=va, color='black')
+                plt.text(x + dx, y + dy, str(hole_num_int), fontsize=14, ha=ha, va=va, color='black')
 
         # Configure legend
-        plt.legend(title="Hole Locations", loc="upper right", fontsize=12, frameon=True)
+        plt.legend(title="Hole Locations", loc="upper right", fontsize=16, frameon=True)
 
         # Configure plot limits and labels
         x_min, x_max = self.data["Mean(X)"].min(), self.data["Mean(X)"].max()
         y_min, y_max = self.data["Mean(Y)"].min(), self.data["Mean(Y)"].max()
         plt.xlim(x_min - 5, x_max + 5.5)
         plt.ylim(y_min - 4, y_max + 4)
-        plt.xlabel("X Position (mm)", fontsize=14)
-        plt.ylabel("Y Position (mm)", fontsize=14)
-        plt.title("Measured and MLE Modeled Hole Locations", fontsize=16)
+        plt.xlabel("X Position (mm)", fontsize=17)
+        plt.ylabel("Y Position (mm)", fontsize=17)
+        plt.title("Measured and MLE Modeled Hole Locations", fontsize=18)
         plt.grid(True, linestyle=":", linewidth=0.6, alpha=0.8)
         plt.minorticks_on()
 
@@ -2199,6 +2210,12 @@ class Calender_Analysis:
                 summary_df = az.summary(thinned_posterior_data, stat_funcs=func_dict, extend=True)
             else:
                 summary_df = az.summary(posterior_data, stat_funcs=func_dict, extend=True)
+            
+            rad_to_deg_cols = ["median", "68%_lower", "68%_upper", "90%_lower", "90%_upper",
+                   "95%_lower", "95%_upper", "99%_lower", "99%_upper"]
+            alpha_mask = summary_df.index.str.contains("alpha")
+
+            summary_df.loc[alpha_mask, rad_to_deg_cols] = summary_df.loc[alpha_mask, rad_to_deg_cols].apply(np.degrees)
 
             # Convert percentile thresholds to deviations from the median
             for ci in ["68%", "90%", "95%", "99%"]:
@@ -2480,6 +2497,166 @@ class Calender_Analysis:
 
         return mcmc_hole_locations
 
+
+    def plot_posterior_holes_2(self, posterior_data, hole_no=1, section_no=5):
+        """
+        Plots the posterior distribution of hole positions based on MCMC samples.
+
+        Parameters
+        ----------
+        posterior_data : arviz.InferenceData or str
+            The MCMC posterior samples as an ArviZ InferenceData object or a path to a NetCDF file.
+        hole_no : int, optional
+            The hole number to analyze.
+        section_no : int, optional
+            The section number to analyze.
+
+        Returns
+        -------
+        None
+            Displays a plot of credible intervals.
+        """
+        if not jnp.any((self.hole_nos_obs == hole_no) & (self.section_ids_obs == section_no)):
+            raise ValueError("Error: The hole number and section number combination is not in the observed data.")
+
+        if not isinstance(posterior_data, az.InferenceData):
+            if isinstance(posterior_data, str) and os.path.isfile(posterior_data):
+                try:
+                    posterior_data_path = posterior_data
+                    thinned_posterior_path = posterior_data_path.replace(".nc", "_thinned.nc")
+                    posterior_data = az.from_netcdf(posterior_data)
+                    if os.path.isfile(thinned_posterior_path):
+                        thinned_posterior_data = az.from_netcdf(thinned_posterior_path)
+                        mcmc_params = thinned_posterior_data.posterior
+                        logging.info("Loaded thinned posterior data from NetCDF file.")
+                    else:
+                        mcmc_params = posterior_data.posterior
+                        thinned_posterior_data = None
+                    logging.info("Loaded posterior data from NetCDF file.")
+                except Exception as e:
+                    raise ValueError(f"Error loading NetCDF file: {e}")
+            else:
+                raise TypeError("posterior_data must be an ArviZ InferenceData object or a valid NetCDF file path.")
+        else:
+            thinned_posterior_data = None
+            mcmc_params = posterior_data.posterior
+
+        param_names = list(mcmc_params.keys())
+        all_param_samples = {param: mcmc_params[param].stack(sample=("chain", "draw")).values for param in param_names}
+
+        N_samples = jnp.array(all_param_samples['N'])
+        r_samples = jnp.array(all_param_samples['r'])
+        x0_samples = jnp.array(all_param_samples['x0']).T
+        y0_samples = jnp.array(all_param_samples['y0']).T
+        alpha_samples = jnp.array(all_param_samples['alpha']).T
+
+        # --- Compute MCMC hole positions ---
+        mcmc_hole_locations = []
+        for i in range(len(N_samples)):
+            hole_position = self.hole_positions(
+                float(N_samples[i]), float(r_samples[i]),
+                x0_samples[i], y0_samples[i], alpha_samples[i],
+                section_ids=section_no, hole_nos=hole_no
+            )
+            mcmc_hole_locations.append(hole_position)
+
+        mcmc_hole_locations = jnp.array(mcmc_hole_locations).T
+        x_post_samples, y_post_samples = mcmc_hole_locations[0], mcmc_hole_locations[1]
+
+        x_mean, y_mean = jnp.mean(x_post_samples), jnp.mean(y_post_samples)
+        x_std, y_std = jnp.std(x_post_samples), jnp.std(y_post_samples)
+
+        # --- Get observed hole position ---
+        hole_obs_index = jnp.where((self.hole_nos_obs == hole_no) & (self.section_ids_obs == section_no))
+        x_obs = self.x_obs[hole_obs_index]
+        y_obs = self.y_obs[hole_obs_index]
+
+        # --- Plot ---
+        fig, ax = plt.subplots(figsize=(7, 7))
+
+        ax.scatter(x_post_samples, y_post_samples, s=5, color="blue", alpha=0.3, label="MCMC Samples")
+        ax.scatter(x_obs, y_obs, color="red", s=100, edgecolor="black", label="Observed Hole")
+
+        # --- Plot mean & uncertainty ---
+        if self.model_type == "isotropic":
+            cov = np.cov(x_post_samples, y_post_samples)
+            vals, vecs = np.linalg.eigh(cov)
+            order = vals.argsort()[::-1]
+            vals, vecs = vals[order], vecs[:, order]
+            width, height = 2 * np.sqrt(vals)
+            angle = np.degrees(np.arctan2(vecs[1, 0], vecs[0, 0]))
+
+            ellipse = Ellipse((x_mean, y_mean), width, width, angle=angle,
+                            edgecolor='red', facecolor='none', lw=2,
+                            label=r'1$\sigma$ Contour')
+            
+            ax.add_patch(ellipse)
+
+            # Mark mean
+            ax.plot(x_mean, y_mean, "rx", markersize=18)
+
+            x0 = [79.689000, 79.924000, 79.865000, 81.534000, 81.971000, 83.178000]
+            y0 = [136.075000, 135.730000, 135.713000, 136.14000, 135.974000, 136.419000]
+            r = 77.353000
+
+            x_centre = x0[section_no - 1]
+            y_centre = y0[section_no - 1]
+            # Add dashed black circle
+            circle = Circle((x_centre, y_centre), r, edgecolor='black', facecolor='none',
+                            linestyle='--', linewidth=1.5, label="Fitted Ring")
+            ax.add_patch(circle)
+
+
+
+        elif self.model_type == "anisotropic":
+            cov = np.cov(x_post_samples, y_post_samples)
+            vals, vecs = np.linalg.eigh(cov)
+            order = vals.argsort()[::-1]
+            vals, vecs = vals[order], vecs[:, order]
+            width, height = 2 * np.sqrt(vals)
+            angle = np.degrees(np.arctan2(vecs[1, 0], vecs[0, 0]))
+
+            ellipse = Ellipse((x_mean, y_mean), width, height, angle=angle,
+                            edgecolor='red', facecolor='none', lw=2,
+                            label=r'1$\sigma$ Contour')
+
+            ax.add_patch(ellipse)
+
+            # Mark mean
+            ax.plot(x_mean, y_mean, "rx", markersize=18)
+
+            x0 = [79.689000, 79.908000, 79.861000, 81.438000, 81.492000, 83.237000]
+            y0 = [136.032000, 135.716000, 135.708000, 136.086000, 135.834000, 136.425000]
+            r = 77.339000
+
+            x_centre = x0[section_no - 1]
+            y_centre = y0[section_no - 1]
+            # Add dashed black circle
+            circle = Circle((x_centre, y_centre), r, edgecolor='black', facecolor='none',
+                            linestyle='--', linewidth=1.5, label="Fitted Ring")
+            ax.add_patch(circle)
+
+
+
+
+        # Final styling
+        ax.set_xlabel("X (mm)", fontsize=16)
+        ax.set_ylabel("Y (mm)", fontsize=16)
+        ax.tick_params(axis='x', labelsize=16)
+        if self.model_type == "isotropic":
+            ax.set_aspect('equal', adjustable='datalim')
+        if self.model_type == "anisotropic":
+            ax.set_aspect('equal', adjustable='datalim')
+        ax.set_xlim(x_mean-width*3.5, x_mean+width*3.5)
+        ax.set_ylim(y_mean-height*3.5, y_mean+height*3.5)
+        ax.set_title(f"Posterior Hole Positions\n(Hole {hole_no}, Section {section_no})", fontsize=17)
+        ax.legend(fontsize=16)
+        ax.grid(True, linestyle="--", alpha=0.5)
+        plt.tight_layout()
+        plt.show()
+
+        return mcmc_hole_locations
+            
 
 ######## THIS IS NESTED SAMPLING ########
 
