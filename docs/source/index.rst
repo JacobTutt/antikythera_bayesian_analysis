@@ -1,5 +1,5 @@
-S2 Coursework Documentation
-===========================
+Antikythera Mechanism Bayesian Analysis
+=======================================
 
 .. toctree::
    :maxdepth: 2

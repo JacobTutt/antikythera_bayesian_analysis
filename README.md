@@ -48,7 +48,7 @@ Provides a flexible and modular framework for modelling the fragmented Antikythe
 
 ## Documentation for the project
 
-[Documentation on Read the Docs](https://coursework-s2.readthedocs.io/en/latest/Calender_Analysis/index.html)
+[Documentation on Read the Docs](https://antikythera-bayesian-analysis.readthedocs.io/en/latest/)
 
 For this project I have produced documentation for the pipeline to make it more accessible and easier to follow. Throughout the notebooks hyperlinks are provided to the relevent functions.
 
