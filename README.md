@@ -1,13 +1,6 @@
-# S2 Coursework - Bayesian Analysis of the Antikythera Mechanism
+# Bayesian Analysis of the Antikythera Mechanism
 
-This repository contains the pipeline, its documentation, and notebooks explaining its functionality and the implementation required for the coursework.
----
-
-## Documentation for the project
-
-[Documentation on Read the Docs](https://coursework-s2.readthedocs.io/en/latest/Calender_Analysis/index.html)
-
-For this project I have produced documentation for the pipeline to make it more accessible and easier to follow, hosted on read the docs this should allow you to see a break down of each functions details as well as direct access to the course code. Throughout the notebooks hyperlinks are provided to the relevent functions.
+This project applies a Bayesian Hamiltonian Monte Carlo analysis to infer the original structure of the fragmented Antikythera calendar ring, providing statistically robust estimates of its intended configuration.
 
 ---
 
@@ -51,6 +44,16 @@ Provides a flexible and modular framework for modelling the fragmented Antikythe
 * **Stable Evidence Calculation:** Computes Bayesian evidence in log-space to maintain numerical stability.
 * **Prior Sampling:** Efficiently handles sampling from constrained prior distributions, ensuring physically relevant parameter exploration. The `ns_prior_transform` function maps unit cube samples to various prior types for robust use with for both scalar and section-based parameters.
 
+---
+
+## Documentation for the project
+
+[Documentation on Read the Docs](https://coursework-s2.readthedocs.io/en/latest/Calender_Analysis/index.html)
+
+For this project I have produced documentation for the pipeline to make it more accessible and easier to follow. Throughout the notebooks hyperlinks are provided to the relevent functions.
+
+---
+
 
 ## Installation Instructions
 
@@ -61,7 +64,7 @@ To run the notebooks, please follow these steps:
 Clone the repository from the remote repository (GitLab) to your local machine.
 Or your 
 ```bash
-git clone https://gitlab.developers.cam.ac.uk/phy/data-intensive-science-mphil/assessments/s2_coursework/jlt67.git
+git clone https://github.com/JacobTutt/antikythera_bayesian_analysis.git
 ```
 
 ### 2. Create a Fresh Virtual Environment
@@ -82,22 +85,12 @@ pip install -e .
 ### 4. Set Up a Jupyter Notebook Kernel
 To ensure the virtual environment is recognised within Jupyter notebooks, set up a kernel:
 ```bash
-python -m ipykernel install --user --name=env --display-name "Python (S2 Coursework)"
+python -m ipykernel install --user --name=env --display-name "Python (Antikythera)"
 ```
 
 ### 5. Run the Notebooks
-Open the notebooks and select the created kernel (Python (S2 Coursework)) to run the code.
+Open the notebooks and select the created kernel (Python (Antikythera)) to run the code.
 
-## Report for the Coursework
+## Report
 
-The coureworks PDF report can be found under the **Report** directory of the repository
-
-## Declaration of Use of Autogeneration Tools
-
-This project made use of Large Language Models (LLMs), primarily ChatGPT and Co-Pilot, to assist in the development of the statistical analysis pipeline. These tools were utilized for:
-
-- Generating detailed docstrings for the repository’s documentation.
-- Formatting plots to enhance presentation quality.
-- Performing iterative changes to already defined code.
-- Debugging code and identifying issues in implementation.
-- Assisting with LaTeX formatting for the report.
+A report for this project can be found under the Report directory of the repository
