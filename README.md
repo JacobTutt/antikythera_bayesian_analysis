@@ -1,12 +1,28 @@
-# Bayesian Analysis of the Antikythera Mechanism
+# **Bayesian Analysis of the Antikythera Mechanism**
+
+## Author: Jacob Tutt, Department of Physics, University of Cambridge
+
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Documentation Status](https://readthedocs.org/projects/antikythera-bayesian-analysis/badge/?version=latest)](https://antikythera-bayesian-analysis.readthedocs.io/en/latest/?badge=latest)
+
+## Description
 
 This project applies a Bayesian Hamiltonian Monte Carlo analysis to infer the original structure of the fragmented Antikythera calendar ring, providing statistically robust estimates of its intended configuration.
 
----
+## Table of Contents
+- [Pipeline Functionalities](#calendar-analysis-pipeline-outline)
+- [Notebooks](#notebooks)
+- [Results](#results)
+- [Documentation](#documentation)
+- [Installation](#installation-and-usage)
+- [License](#license)
+- [Support](#support)
+- [Author](#author)
+
 
 ## Calendar Analysis Pipeline Outline
 
-Provides a flexible and modular framework for modelling the fragmented Antikythera calendar ring using Bayesian inference.
+This work present and self consistent [pipeline](calender_analysis/analysis.py) a flexible and modular framework for modelling the fragmented Antikythera calendar ring using Bayesian inference.
 
 **1. Data Filtering**
 
@@ -44,18 +60,28 @@ Provides a flexible and modular framework for modelling the fragmented Antikythe
 * **Stable Evidence Calculation:** Computes Bayesian evidence in log-space to maintain numerical stability.
 * **Prior Sampling:** Efficiently handles sampling from constrained prior distributions, ensuring physically relevant parameter exploration. The `ns_prior_transform` function maps unit cube samples to various prior types for robust use with for both scalar and section-based parameters.
 
----
+## Notebooks
 
-## Documentation for the project
+The [notebooks](notebooks) in this repository serve as walkthroughs for the analysis performed. They include derivations of the mathematical implementations, explanations of key choices made, and present the main results. Five notebooks are provided:
 
-[Documentation on Read the Docs](https://antikythera-bayesian-analysis.readthedocs.io/en/latest/)
+| Notebook | Description |
+|----------|-------------|
+| [Notebook 1: Exploration](notebooks/Notebook_0_Exploration.ipynb) | Performs prelimary analysis on the Antikythera calendar images to provided more informed  constraint on the parameters priors. |
+| [Notebook 2: Anisotropic Model](notebooks/Notebook_1_Anisotropic.ipynb) | Employs a rigurous bayesian analysis on the Antikythera Calender using an anisotropic model ($\sigma_r,\sigma_t$), while also providing a walkthrough of the pipeline and its functionalities. |
+| [Notebook 3: Isotropic Model](notebooks/Notebook_2_Isotropic.ipynb) | An similiar analysis to that of notebook 2, however using an istropic model ($\sigma = \sigma_r = \sigma_t$) to compare results.|
+| [Notebook 4: Comparison](notebooks/Notebook_3_Model_Comparison.ipynb) | Uses the bayesian evidence ratio to preform model comparison and evaluate what model (Isotropic or Anistropic) provides the best statistical fit to the data. This was achieved using both the Savage Dickey Ratio and a  custom implementation of Nested Sampling. |
+| [Notebook 5: Extra Results](notebooks/Notebook_4_Extra.ipynb) | Explores the impact of different data filtering schemes on parameter inference. Tests over six combinations of model and dataset configurations using the established pipeline. |
 
-For this project I have produced documentation for the pipeline to make it more accessible and easier to follow. Throughout the notebooks hyperlinks are provided to the relevent functions.
+## Results
 
----
+To provide flexibility for the user, intermediate results for all six model–dataset configurations — including MCMC sampling outputs and model configuration optimisations — are precomputed and stored in the [Results](stored_results) directory. Using these can be easily toggled on and off using `rerun_comp_expensive_analysis` at the start of each.
 
 
-## Installation Instructions
+## Documentation
+
+For this project I have produced [documentation](https://antikythera-bayesian-analysis.readthedocs.io/en/latest/) for the pipeline to make it more accessible and easier to follow. Throughout the notebooks hyperlinks are provided to the relevent functions.
+
+## Installation and Usage
 
 To run the notebooks, please follow these steps:
 
@@ -89,8 +115,16 @@ python -m ipykernel install --user --name=env --display-name "Python (Antikyther
 ```
 
 ### 5. Run the Notebooks
-Open the notebooks and select the created kernel (Python (Antikythera)) to run the code.
+Open the notebooks and select the created kernel `Python (Antikythera)` to run the code.
 
-## Report
+## For Assessment
+- The associated project report can be found under [Project Report](report/Report.pdf). 
 
-A report for this project can be found under the Report directory of the repository
+## License
+This project is licensed under the [MIT License](https://opensource.org/license/mit/) - see the [LICENSE](LICENSE.txt) file for details.
+
+## Support
+If you have any questions, run into issues, or just want to discuss the project, feel free to:
+- Open an issue on the [GitHub Issues](https://github.com/JacobTutt/antikythera_bayesian_analysis/issues) page.  
+- Reach out to me directly via [email](mailto:jacobtutt@icloud.com).
+
