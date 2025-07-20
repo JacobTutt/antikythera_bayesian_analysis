@@ -1,4 +1,4 @@
-# **Bayesian Analysis of the Antikythera Mechanism**
+# **Reverse Engineering the Antikythera Calendar: A Bayesian Perspective**
 
 ## Author: Jacob Tutt, Department of Physics, University of Cambridge
 
@@ -18,7 +18,6 @@ This project applies a Bayesian Hamiltonian Monte Carlo analysis to infer the or
 - [License](#license)
 - [Support](#support)
 - [Author](#author)
-
 
 ## Calendar Analysis Pipeline Outline
 
